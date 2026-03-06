@@ -4,6 +4,7 @@
 //! supporting SKY130, IHP SG13G2, and GF180MCU process design kits.
 
 pub mod artwork;
+pub mod color;
 pub mod drc;
 pub mod gdsio;
 pub mod lef;

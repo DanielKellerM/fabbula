@@ -51,7 +51,7 @@ Existing image-to-GDSII tools are fragmented, single-PDK, and produce naive pixe
 
 - **End-to-end pipeline** - PNG from ChatGPT/Gemini goes in, fab-ready GDSII comes out
 - **Pure Rust** - built-in vectorizer (vtracer), SVG parser (usvg), GDSII writer (gds21). No Python, no Inkscape, no potrace, no ImageMagick. Just `cargo install fabbula`
-- **Multi-PDK** - ships with SKY130, IHP SG13G2, and GF180MCU configurations. Add your own with a 30-line TOML file
+- **Multi-PDK** - ships with 5 built-in PDKs (SKY130, IHP SG13G2, GF180MCU, FreePDK45, ASAP7). Add your own with a 30-line TOML file
 - **DRC-clean by construction** - polygon sizing and grid snapping derived from actual PDK design rules
 - **Blazing fast** - packed bitset bitmap, parallel DRC via rayon, streaming I/O. Processes a 2048x2048 image in ~12ms and validates 100k rectangles in ~15ms. See [Performance](#performance)
 - **Vector-quality output** - traces curves into proper polygons, not just pixel rectangles. Your art looks like art, not a mosaic
@@ -108,6 +108,8 @@ fabbula pipeline -i dalle_output.png -o art.gds -p sky130 \
 | **SKY130** | SkyWater 130nm | met5 | 72/20 | 1.6 µm | 1.6 µm |
 | **IHP SG13G2** | IHP 130nm BiCMOS | TopMetal2 | 134/0 | 1.8 µm | 1.8 µm |
 | **GF180MCU** | GlobalFoundries 180nm | Metal5 | 81/0 | 0.44 µm | 0.46 µm |
+| **FreePDK45** | NCSU 45nm (virtual) | Metal10 | 29/0 | 0.8 µm | 0.8 µm |
+| **ASAP7** | ASU/ARM 7nm FinFET (virtual) | M9 | 90/0 | 0.04 µm | 0.04 µm |
 
 Adding a new PDK takes about 30 lines of TOML:
 
@@ -179,7 +181,7 @@ All existing tools are Python or C, most require external dependencies (Magic VL
 |---|---|---|---|---|---|
 | Language | Rust | Python | Python | C | Python |
 | Self-contained | Yes | No (KLayout, IM, Potrace) | No (Magic VLSI) | Yes | No (Magic, Docker) |
-| Multi-PDK | 3 built-in + custom TOML | IHP SG13G2 | SKY130 | Manual | SKY130 |
+| Multi-PDK | 5 built-in + custom TOML | IHP SG13G2 | SKY130 | Manual | SKY130 |
 | DRC-clean output | By construction | Tetromino fill | Manual | No | No |
 | Parallel DRC | Yes (rayon) | No | No | No | No |
 | GDS merge | Yes | Yes (via KLayout) | No | No | No |

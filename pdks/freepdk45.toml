@@ -1,0 +1,105 @@
+# FreePDK45 PDK Configuration for fabbula
+# NCSU 45nm virtual/academic PDK
+#
+# Sources:
+#   https://eda.ncsu.edu/freepdk/freepdk45/
+#   https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts/blob/master/flow/platforms/nangate45/FreePDK45.lyt
+#   FreePDK45 Design Rule Manual (METALG rules for Metal10)
+
+[pdk]
+name = "freepdk45"
+description = "FreePDK45 - NCSU 45nm virtual PDK"
+node_nm = 45
+db_units_per_um = 1000        # 1nm database unit
+
+# Top metal layer for artwork (Metal10 - thickest routing layer)
+[artwork_layer]
+name = "Metal10"
+gds_layer = 29
+gds_datatype = 0
+purpose = "drawing"
+
+# Alternative: Metal8 (thinner metal with finer pitch)
+[artwork_layer_alt]
+name = "Metal8"
+gds_layer = 25
+gds_datatype = 0
+purpose = "drawing"
+
+# DRC rules for the artwork layer (Metal10 - METALG rules)
+# All dimensions in micrometers
+[drc]
+min_width = 0.800             # METALG minimum width
+min_spacing = 0.800           # METALG minimum spacing
+min_area = 0.0                # no minimum area specified
+min_enclosed_area = 0.0
+density_min = 0.0
+density_max = 0.80            # typical density limit
+density_window_um = 500.0
+wide_metal_threshold = 0.900  # spacing increases for wide metal
+wide_metal_spacing = 0.900    # wide metal spacing rule
+
+# DRC rules for the alt layer (Metal8)
+[drc_alt]
+min_width = 0.400
+min_spacing = 0.400
+min_area = 0.0
+min_enclosed_area = 0.0
+density_min = 0.0
+density_max = 0.80
+density_window_um = 500.0
+
+# Grid snapping
+[grid]
+manufacturing_grid_um = 0.005 # 5nm manufacturing grid
+
+# Metal stack info (for context / rendering)
+[[metal_stack]]
+name = "Metal1"
+gds_layer = 11
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal2"
+gds_layer = 13
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal3"
+gds_layer = 15
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal4"
+gds_layer = 17
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal5"
+gds_layer = 19
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal6"
+gds_layer = 21
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal7"
+gds_layer = 23
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal8"
+gds_layer = 25
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal9"
+gds_layer = 27
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal10"
+gds_layer = 29
+gds_datatype = 0

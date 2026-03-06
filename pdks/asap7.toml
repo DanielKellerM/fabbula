@@ -1,0 +1,104 @@
+# ASAP7 PDK Configuration for fabbula
+# Arizona State University / ARM 7nm FinFET virtual PDK
+#
+# Sources:
+#   https://asap.asu.edu/
+#   https://github.com/The-OpenROAD-Project/asap7
+#   L.T. Clark et al., "ASAP7: A 7-nm FinFET Predictive Process Design Kit"
+#   Microelectronics Journal, 2016
+#   GDS layer map: OpenROAD-flow-scripts/flow/platforms/asap7/KLayout/asap7.lyt
+#   DRC rules: asap7_tech_1x_201209.lef (M9 WIDTH 0.04, PITCH 0.08)
+
+[pdk]
+name = "asap7"
+description = "ASAP7 - ASU/ARM 7nm FinFET virtual PDK"
+node_nm = 7
+db_units_per_um = 1000        # 1nm database unit
+
+# Top metal layer for artwork (M9 - thickest routing layer)
+[artwork_layer]
+name = "M9"
+gds_layer = 90
+gds_datatype = 0
+purpose = "drawing"
+
+# Alternative: M8
+[artwork_layer_alt]
+name = "M8"
+gds_layer = 80
+gds_datatype = 0
+purpose = "drawing"
+
+# DRC rules for the artwork layer (M9)
+# All dimensions in micrometers (1x scale, not 4x)
+[drc]
+min_width = 0.040             # 40nm minimum width (from 1x LEF)
+min_spacing = 0.040           # 40nm minimum spacing (pitch 80nm - width 40nm)
+min_area = 0.008              # ~0.00752 um^2 (from LEF AREA rule, rounded up)
+min_enclosed_area = 0.0
+density_min = 0.0
+density_max = 0.80            # typical density limit
+density_window_um = 500.0
+max_width = 2.0               # 2.0 um max width (from LEF MAXWIDTH)
+
+# DRC rules for the alt layer (M8 - same rules as M9)
+[drc_alt]
+min_width = 0.040             # 40nm minimum width
+min_spacing = 0.040           # 40nm minimum spacing
+min_area = 0.008
+min_enclosed_area = 0.0
+density_min = 0.0
+density_max = 0.80
+density_window_um = 500.0
+max_width = 2.0
+
+# Grid snapping
+[grid]
+manufacturing_grid_um = 0.001 # 1nm manufacturing grid (7nm node)
+
+# Metal stack info (for context / rendering)
+# GDS layer numbers from OpenROAD ASAP7 KLayout technology file
+[[metal_stack]]
+name = "M1"
+gds_layer = 19
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M2"
+gds_layer = 20
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M3"
+gds_layer = 30
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M4"
+gds_layer = 40
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M5"
+gds_layer = 50
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M6"
+gds_layer = 60
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M7"
+gds_layer = 70
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M8"
+gds_layer = 80
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M9"
+gds_layer = 90
+gds_datatype = 0

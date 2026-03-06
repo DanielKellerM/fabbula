@@ -160,6 +160,21 @@ For large GreedyMerge rectangles spanning many grid cells, most cells are interi
 
 ---
 
+## Die-scale Stress Test: fabbula2 (2nm) GPU Demo
+
+**PDK:** fabbula2 - imaginary 2nm nanosheet PDK (inspired by TSMC N2)
+
+Demonstrated fabbula generating artwork at GPU die scale using the fabbula2 PDK with AP layer rules (min_width 0.80 um, min_spacing 0.80 um, pixel pitch 1.6 um).
+
+**Test run:** 5120x5120 pixel checkerboard at 1.6 um pitch = ~8.2mm x 8.2mm physical area.
+- 204,800 merged rectangles (greedy-merge)
+- 13 MB GDS output, 34 MB interactive HTML preview
+- Total pipeline time: ~190ms (image load through GDS write + HTML preview)
+
+**Full die-scale projection:** NVIDIA B200-class die (~28.5mm x 28.5mm) would require ~17,812 x 17,812 pixel bitmap (~317M pixels in separated mode). The parallel strip-based GreedyMerge and SAT density checking scale linearly, making this feasible with fabbula's current architecture.
+
+---
+
 ## Benchmark Infrastructure
 
 All optimizations are verified using Criterion benchmarks in `profiling/`:

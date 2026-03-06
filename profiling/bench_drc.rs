@@ -102,12 +102,7 @@ fn bench_density_only_50k(c: &mut Criterion) {
     let rects = make_grid(224);
     c.bench_function("density_only_50k", |b| {
         b.iter(|| {
-            let _ = check_density_only(
-                black_box(&rects),
-                pdk.pdk.db_units_per_um,
-                &pdk.drc,
-                None,
-            );
+            let _ = check_density_only(black_box(&rects), pdk.pdk.db_units_per_um, &pdk.drc, None);
         });
     });
 }

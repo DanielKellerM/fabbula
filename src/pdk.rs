@@ -59,6 +59,24 @@ pub struct DrcRules {
     pub wide_metal_spacing: Option<f64>,
 }
 
+impl DrcRules {
+    /// Return the effective minimum spacing, accounting for wide-metal rules.
+    ///
+    /// When wide_metal_threshold is <= 2 * min_width, merged rectangles will
+    /// inevitably exceed the threshold, so we must use wide_metal_spacing to
+    /// maintain DRC-clean-by-construction guarantees.
+    pub fn effective_spacing(&self) -> f64 {
+        if let (Some(threshold), Some(wide_spacing)) =
+            (self.wide_metal_threshold, self.wide_metal_spacing)
+        {
+            if threshold <= self.min_width * 2.0 {
+                return wide_spacing.max(self.min_spacing);
+            }
+        }
+        self.min_spacing
+    }
+}
+
 fn default_density_max() -> f64 {
     0.80
 }
@@ -82,6 +100,21 @@ pub struct MetalLayerInfo {
     pub gds_datatype: i16,
 }
 
+/// An artwork layer profile combining layer config and DRC rules.
+/// Used by multi-layer color workflows.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArtworkLayerProfile {
+    pub name: String,
+    pub gds_layer: i16,
+    pub gds_datatype: i16,
+    #[serde(default)]
+    pub purpose: String,
+    /// Color channel mapping for channel extraction mode ("red", "green", "blue")
+    #[serde(default)]
+    pub color: Option<String>,
+    pub drc: DrcRules,
+}
+
 /// Full PDK configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct PdkConfig {
@@ -94,6 +127,9 @@ pub struct PdkConfig {
     pub grid: GridConfig,
     #[serde(default)]
     pub metal_stack: Vec<MetalLayerInfo>,
+    /// Optional multi-layer artwork profiles (new format)
+    #[serde(default)]
+    pub artwork_layers: Option<Vec<ArtworkLayerProfile>>,
 }
 
 impl PdkConfig {
@@ -113,8 +149,11 @@ impl PdkConfig {
             "sky130" => include_str!("../pdks/sky130.toml"),
             "ihp_sg13g2" | "ihp" | "sg13g2" => include_str!("../pdks/ihp_sg13g2.toml"),
             "gf180mcu" | "gf180" => include_str!("../pdks/gf180mcu.toml"),
+            "freepdk45" => include_str!("../pdks/freepdk45.toml"),
+            "asap7" => include_str!("../pdks/asap7.toml"),
+            "fabbula2" => include_str!("../pdks/fabbula2.toml"),
             other => anyhow::bail!(
-                "Unknown built-in PDK '{}'. Available: sky130, ihp_sg13g2, gf180mcu",
+                "Unknown built-in PDK '{}'. Available: sky130, ihp_sg13g2, gf180mcu, freepdk45, asap7, fabbula2",
                 other
             ),
         };
@@ -125,7 +164,7 @@ impl PdkConfig {
 
     /// List available built-in PDKs
     pub fn list_builtins() -> &'static [&'static str] {
-        &["sky130", "ihp_sg13g2", "gf180mcu"]
+        &["sky130", "ihp_sg13g2", "gf180mcu", "freepdk45", "asap7", "fabbula2"]
     }
 
     /// Return the DRC rules for the active layer.
@@ -139,10 +178,53 @@ impl PdkConfig {
         }
     }
 
+    /// Return artwork layer profiles for multi-layer workflows.
+    ///
+    /// If `artwork_layers` is set in the TOML, returns those directly.
+    /// Otherwise, builds profiles from the legacy `artwork_layer` + `drc` fields,
+    /// including `artwork_layer_alt` + `drc_alt` if present.
+    pub fn layer_profiles(&self) -> Vec<ArtworkLayerProfile> {
+        if let Some(ref layers) = self.artwork_layers {
+            return layers.clone();
+        }
+        let mut profiles = vec![ArtworkLayerProfile {
+            name: self.artwork_layer.name.clone(),
+            gds_layer: self.artwork_layer.gds_layer,
+            gds_datatype: self.artwork_layer.gds_datatype,
+            purpose: self.artwork_layer.purpose.clone(),
+            color: None,
+            drc: self.drc.clone(),
+        }];
+        if let (Some(ref alt_layer), Some(ref alt_drc)) = (&self.artwork_layer_alt, &self.drc_alt) {
+            profiles.push(ArtworkLayerProfile {
+                name: alt_layer.name.clone(),
+                gds_layer: alt_layer.gds_layer,
+                gds_datatype: alt_layer.gds_datatype,
+                purpose: alt_layer.purpose.clone(),
+                color: None,
+                drc: alt_drc.clone(),
+            });
+        }
+        profiles
+    }
+
+    /// Compute pixel pitch for a given DRC rule set.
+    /// Uses effective_spacing to account for wide-metal rules.
+    pub fn pixel_pitch_um_for_drc(&self, drc: &DrcRules) -> f64 {
+        let pw = self.snap_to_grid(drc.min_width);
+        let gap = self.snap_to_grid(drc.effective_spacing());
+        pw + gap
+    }
+
     fn validate(&self) -> Result<()> {
         Self::validate_drc_rules(&self.drc, "drc")?;
         if let Some(ref alt) = self.drc_alt {
             Self::validate_drc_rules(alt, "drc_alt")?;
+        }
+        if let Some(ref layers) = self.artwork_layers {
+            for (i, profile) in layers.iter().enumerate() {
+                Self::validate_drc_rules(&profile.drc, &format!("artwork_layers[{}].drc", i))?;
+            }
         }
         anyhow::ensure!(
             self.grid.manufacturing_grid_um > 0.0,
@@ -201,17 +283,14 @@ impl PdkConfig {
         (um / grid).round() * grid
     }
 
-    /// Minimum pixel size in µm that satisfies both min_width and min_spacing.
+    /// Minimum pixel size in µm that satisfies both min_width and spacing rules.
     /// Each "pixel" in the artwork maps to a square of this size.
     /// This is what makes DRC-clean output possible: if every polygon
-    /// is at least min_width wide and every gap is at least min_spacing,
-    /// basic width/spacing rules are satisfied by construction.
+    /// is at least min_width wide and every gap satisfies effective_spacing,
+    /// all width/spacing rules are satisfied by construction.
     pub fn pixel_pitch_um(&self) -> f64 {
-        // pixel_size = min_width (snapped to grid)
-        // gap_size = min_spacing (snapped to grid)
-        // pitch = pixel_size + gap_size
         let pw = self.snap_to_grid(self.drc.min_width);
-        let gap = self.snap_to_grid(self.drc.min_spacing);
+        let gap = self.snap_to_grid(self.drc.effective_spacing());
         pw + gap
     }
 }
@@ -238,6 +317,31 @@ mod tests {
     fn test_load_gf180() {
         let pdk = PdkConfig::builtin("gf180mcu").unwrap();
         assert_eq!(pdk.artwork_layer.gds_layer, 81);
+    }
+
+    #[test]
+    fn test_load_freepdk45() {
+        let pdk = PdkConfig::builtin("freepdk45").unwrap();
+        assert_eq!(pdk.pdk.name, "freepdk45");
+        assert_eq!(pdk.artwork_layer.gds_layer, 29);
+        assert!(pdk.drc.min_width > 0.0);
+    }
+
+    #[test]
+    fn test_load_asap7() {
+        let pdk = PdkConfig::builtin("asap7").unwrap();
+        assert_eq!(pdk.pdk.name, "asap7");
+        assert_eq!(pdk.artwork_layer.gds_layer, 90);
+        assert!(pdk.drc.min_width > 0.0);
+    }
+
+    #[test]
+    fn test_load_fabbula2() {
+        let pdk = PdkConfig::builtin("fabbula2").unwrap();
+        assert_eq!(pdk.pdk.name, "fabbula2");
+        assert_eq!(pdk.pdk.node_nm, 2);
+        assert_eq!(pdk.artwork_layer.gds_layer, 150);
+        assert!(pdk.drc.min_width > 0.0);
     }
 
     #[test]

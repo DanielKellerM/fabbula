@@ -1,0 +1,139 @@
+# fabbula2 PDK Configuration
+# Imaginary 2nm nanosheet (gate-all-around) PDK inspired by TSMC N2
+#
+# TSMC N2: first-generation nanosheet transistors, volume production Q4 2025.
+# ~15% speed or 25-30% lower power vs N3E, 15%+ density improvement.
+# Key customers: Apple, NVIDIA, AMD.
+#
+# This is a fictional PDK for demonstration and stress-testing purposes.
+# DRC rules are plausible estimates for a 2nm top-metal stack.
+
+[pdk]
+name = "fabbula2"
+description = "fabbula2 - imaginary 2nm nanosheet PDK (inspired by TSMC N2)"
+node_nm = 2
+db_units_per_um = 1000
+
+# Top metal: Aluminum pad / redistribution layer (topmost)
+[artwork_layer]
+name = "AP"
+gds_layer = 150
+gds_datatype = 0
+purpose = "drawing"
+
+# Alternative: M15 top copper routing layer
+[artwork_layer_alt]
+name = "M15"
+gds_layer = 140
+gds_datatype = 0
+purpose = "drawing"
+
+# DRC rules for AP (thick aluminum pad layer)
+# Top metal is thick with wide rules even at 2nm node
+[drc]
+min_width = 0.800
+min_spacing = 0.800
+min_area = 1.000
+min_enclosed_area = 0.0
+density_min = 0.20
+density_max = 0.80
+density_window_um = 50.0
+max_width = 8.000
+
+# DRC rules for M15 (fine-pitch top routing, similar to ASAP7 M9)
+[drc_alt]
+min_width = 0.040
+min_spacing = 0.040
+min_area = 0.008
+min_enclosed_area = 0.0
+density_min = 0.20
+density_max = 0.80
+density_window_um = 50.0
+max_width = 2.000
+wide_metal_threshold = 0.200
+wide_metal_spacing = 0.060
+
+# Grid snapping
+[grid]
+manufacturing_grid_um = 0.001    # 1nm grid (sub-2nm node)
+
+# Metal stack (15 metal layers + AP)
+[[metal_stack]]
+name = "M1"
+gds_layer = 10
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M2"
+gds_layer = 20
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M3"
+gds_layer = 30
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M4"
+gds_layer = 40
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M5"
+gds_layer = 50
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M6"
+gds_layer = 60
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M7"
+gds_layer = 70
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M8"
+gds_layer = 80
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M9"
+gds_layer = 90
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M10"
+gds_layer = 100
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M11"
+gds_layer = 110
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M12"
+gds_layer = 120
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M13"
+gds_layer = 125
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M14"
+gds_layer = 130
+gds_datatype = 0
+
+[[metal_stack]]
+name = "M15"
+gds_layer = 140
+gds_datatype = 0
+
+[[metal_stack]]
+name = "AP"
+gds_layer = 150
+gds_datatype = 0

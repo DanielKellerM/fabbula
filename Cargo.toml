@@ -62,6 +62,11 @@ name = "bench_polygon"
 harness = false
 path = "profiling/bench_polygon.rs"
 
+[[bench]]
+name = "bench_artwork"
+harness = false
+path = "profiling/bench_artwork.rs"
+
 [dev-dependencies]
 tempfile = "3"
 assert_cmd = "2"

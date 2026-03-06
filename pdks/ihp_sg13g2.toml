@@ -1,0 +1,70 @@
+# IHP SG13G2 PDK Configuration for fabbula
+# IHP 130nm BiCMOS, 5 thin + 2 thick metal layers (7 total)
+
+[pdk]
+name = "ihp_sg13g2"
+description = "IHP SG13G2 130nm BiCMOS"
+node_nm = 130
+db_units_per_um = 1000
+
+# Top metal layer for artwork — TopMetal2 (3µm thick Al)
+[artwork_layer]
+name = "TopMetal2"
+gds_layer = 134
+gds_datatype = 0
+purpose = "drawing"
+
+# Alternative: TopMetal1 (2µm thick)
+[artwork_layer_alt]
+name = "TopMetal1"
+gds_layer = 125
+gds_datatype = 0
+
+# DRC rules for TopMetal2
+[drc]
+min_width = 1.8
+min_spacing = 1.8
+min_area = 0.0                # check actual PDK rules
+min_enclosed_area = 0.0
+density_min = 0.0
+density_max = 0.80
+density_window_um = 500.0
+
+[grid]
+manufacturing_grid_um = 0.005
+placement_grid_um = 0.48
+
+[[metal_stack]]
+name = "Metal1"
+gds_layer = 8
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal2"
+gds_layer = 10
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal3"
+gds_layer = 30
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal4"
+gds_layer = 50
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal5"
+gds_layer = 67
+gds_datatype = 0
+
+[[metal_stack]]
+name = "TopMetal1"
+gds_layer = 125
+gds_datatype = 0
+
+[[metal_stack]]
+name = "TopMetal2"
+gds_layer = 134
+gds_datatype = 0

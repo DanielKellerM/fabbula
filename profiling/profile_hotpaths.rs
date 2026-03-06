@@ -26,7 +26,8 @@ fn main() {
         eprintln!("GreedyMerge {size}x{size}...");
         for _ in 0..3 {
             let rects =
-                generate_polygons(&bmp, &pdk, PolygonStrategy::GreedyMerge, false).unwrap();
+                generate_polygons(&bmp, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false)
+                    .unwrap();
             std::hint::black_box(&rects);
         }
     }
@@ -34,7 +35,8 @@ fn main() {
     // DRC at scale
     eprintln!("DRC 50k rects...");
     let bmp = dense_pattern(512);
-    let rects = generate_polygons(&bmp, &pdk, PolygonStrategy::GreedyMerge, false).unwrap();
+    let rects =
+        generate_polygons(&bmp, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false).unwrap();
     for _ in 0..5 {
         let v = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
         std::hint::black_box(&v);
@@ -46,7 +48,12 @@ fn main() {
     pdk_density.drc.density_window_um = 50.0;
     eprintln!("Density-only 50k rects...");
     for _ in 0..10 {
-        let v = check_density_only(&rects, pdk_density.pdk.db_units_per_um, &pdk_density.drc, None);
+        let v = check_density_only(
+            &rects,
+            pdk_density.pdk.db_units_per_um,
+            &pdk_density.drc,
+            None,
+        );
         std::hint::black_box(&v);
     }
 

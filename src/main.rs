@@ -6,12 +6,15 @@ use fabbula::artwork::{
     apply_exclusion_mask, enforce_density, enforce_density_region, load_artwork, ArtworkBitmap,
     ThresholdMode,
 };
+use fabbula::color::{extract_channels, extract_palette, LayerBitmap};
 use fabbula::drc::{check_density_only, check_drc, report_drc, DrcRule};
-use fabbula::gdsio::{merge_into_gds, read_existing_metal, write_gds};
-use fabbula::lef::write_lef;
-use fabbula::pdk::PdkConfig;
-use fabbula::polygon::{generate_polygons, PolygonStrategy, Rect};
-use fabbula::preview::{write_html_preview, write_svg};
+use fabbula::gdsio::{merge_into_gds_multi, read_existing_metal, write_gds_multi, LayerRects};
+use fabbula::lef::{write_lef_multi, LefLayer};
+use fabbula::pdk::{ArtworkLayerProfile, DrcRules, PdkConfig};
+use fabbula::polygon::{bounding_box, generate_polygons, PolygonStrategy, Rect};
+use fabbula::preview::{
+    write_html_preview_multi, write_svg_multi, HtmlLayer, DEFAULT_LAYER_COLORS,
+};
 
 #[derive(Parser)]
 #[command(
@@ -87,6 +90,11 @@ enum Commands {
         #[arg(long)]
         max_height: Option<u32>,
 
+        /// Physical artwork size in micrometers (e.g. "2000x2000" for 2mm x 2mm).
+        /// Computes max_width/max_height from PDK pitch automatically.
+        #[arg(long)]
+        size_um: Option<String>,
+
         /// Invert the image (swap metal/gap)
         #[arg(long)]
         invert: bool,
@@ -110,6 +118,14 @@ enum Commands {
         /// Disable automatic density enforcement (allow density violations)
         #[arg(long)]
         no_density_enforce: bool,
+
+        /// Color extraction mode for multi-layer output
+        #[arg(long, default_value = "single", value_enum)]
+        color_mode: ColorModeArg,
+
+        /// Number of palette colors (for palette mode; defaults to number of artwork layers)
+        #[arg(long)]
+        num_colors: Option<usize>,
     },
 
     /// Merge artwork into an existing GDSII chip file
@@ -162,6 +178,10 @@ enum Commands {
         #[arg(long)]
         max_height: Option<u32>,
 
+        /// Physical artwork size in micrometers (e.g. "2000x2000" for 2mm x 2mm)
+        #[arg(long)]
+        size_um: Option<String>,
+
         /// Invert
         #[arg(long)]
         invert: bool,
@@ -173,6 +193,14 @@ enum Commands {
         /// Disable automatic density enforcement
         #[arg(long)]
         no_density_enforce: bool,
+
+        /// Color extraction mode for multi-layer output
+        #[arg(long, default_value = "single", value_enum)]
+        color_mode: ColorModeArg,
+
+        /// Number of palette colors (for palette mode)
+        #[arg(long)]
+        num_colors: Option<usize>,
     },
 
     /// List available built-in PDK configurations
@@ -192,6 +220,16 @@ enum StrategyArg {
     GreedyMerge,
 }
 
+#[derive(Debug, Clone, ValueEnum)]
+enum ColorModeArg {
+    /// Single-layer (default, existing behavior)
+    Single,
+    /// Map R/G/B channels to separate layers
+    Channel,
+    /// K-means color quantization into N layers
+    Palette,
+}
+
 impl From<StrategyArg> for PolygonStrategy {
     fn from(s: StrategyArg) -> Self {
         match s {
@@ -200,6 +238,18 @@ impl From<StrategyArg> for PolygonStrategy {
             StrategyArg::GreedyMerge => PolygonStrategy::GreedyMerge,
         }
     }
+}
+
+/// Build a DRC rule set with the most conservative (largest) values across all profiles.
+/// This ensures all layers use the same pixel pitch and align spatially in multi-layer mode.
+fn most_conservative_drc(profiles: &[ArtworkLayerProfile]) -> DrcRules {
+    let mut drc = profiles[0].drc.clone();
+    for p in &profiles[1..] {
+        drc.min_width = drc.min_width.max(p.drc.min_width);
+        drc.min_spacing = drc.min_spacing.max(p.drc.min_spacing);
+        drc.min_area = drc.min_area.max(p.drc.min_area);
+    }
+    drc
 }
 
 fn load_pdk(name_or_path: &str) -> Result<PdkConfig> {
@@ -220,6 +270,28 @@ fn parse_threshold(s: &str) -> ThresholdMode {
     } else {
         ThresholdMode::Luminance(128)
     }
+}
+
+/// Parse a "WxH" size string in micrometers and convert to pixel dimensions using PDK pitch.
+fn parse_size_um(s: &str, pdk: &PdkConfig, drc: &DrcRules, touching: bool) -> Result<(u32, u32)> {
+    let parts: Vec<&str> = s.split('x').collect();
+    anyhow::ensure!(parts.len() == 2, "size-um must be in WxH format (e.g. 2000x2000)");
+    let w_um: f64 = parts[0].parse().map_err(|_| anyhow::anyhow!("Invalid width in size-um"))?;
+    let h_um: f64 = parts[1].parse().map_err(|_| anyhow::anyhow!("Invalid height in size-um"))?;
+
+    let min_w_um = pdk.snap_to_grid(drc.min_width);
+    let eff_s_um = pdk.snap_to_grid(drc.effective_spacing());
+    let pitch_um = if touching { min_w_um } else { min_w_um + eff_s_um };
+
+    let px_w = (w_um / pitch_um).floor() as u32;
+    let px_h = (h_um / pitch_um).floor() as u32;
+    anyhow::ensure!(px_w > 0 && px_h > 0, "size-um too small for PDK pitch ({}um)", pitch_um);
+
+    tracing::info!(
+        "size-um: {:.1}x{:.1} um -> {}x{} pixels (pitch={:.3} um)",
+        w_um, h_um, px_w, px_h, pitch_um
+    );
+    Ok((px_w, px_h))
 }
 
 fn prepare_bitmap(
@@ -253,23 +325,23 @@ fn prepare_bitmap(
 fn generate_with_density_loop(
     bitmap: &mut ArtworkBitmap,
     pdk: &PdkConfig,
+    drc_rules: &DrcRules,
     strategy: PolygonStrategy,
     touching: bool,
     max_retries: u32,
 ) -> Result<Vec<Rect>> {
-    let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
-    let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
+    let min_w_um = pdk.snap_to_grid(drc_rules.min_width);
+    let eff_s_um = pdk.snap_to_grid(drc_rules.effective_spacing());
     let pitch_um = if touching {
         min_w_um
     } else {
-        min_w_um + min_s_um
+        min_w_um + eff_s_um
     };
     let pitch_dbu = pdk.um_to_dbu(pitch_um);
-    let drc_rules = pdk.active_drc(false);
 
-    let mut best_rects = generate_polygons(bitmap, pdk, strategy, touching)?;
+    let mut best_rects = generate_polygons(bitmap, pdk, drc_rules, strategy, touching)?;
 
-    if pdk.drc.density_max >= 1.0 {
+    if drc_rules.density_max >= 1.0 {
         return Ok(best_rects);
     }
 
@@ -280,7 +352,6 @@ fn generate_with_density_loop(
             return Ok(best_rects);
         }
 
-        // Map all density violations back to bitmap pixel space and fix them
         let density_violations =
             check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, None);
         let mut total_cleared = 0usize;
@@ -290,22 +361,14 @@ fn generate_with_density_loop(
                 continue;
             }
             let (wx_dbu, wy_dbu) = v.location;
-
             let window_dbu = pdk.um_to_dbu(drc_rules.density_window_um);
 
-            // Convert physical DBU window to bitmap pixel coordinates
-            // Pixel (px, py) maps to physical:
-            //   x_dbu = px * pitch_dbu
-            //   y_dbu = (bitmap.height - 1 - py) * pitch_dbu
-            // So: px = x_dbu / pitch_dbu
-            //     py = bitmap.height - 1 - (y_dbu / pitch_dbu)
             let px_start = (wx_dbu / pitch_dbu).max(0) as u32;
             let px_end_dbu = wx_dbu + window_dbu;
             let px_end = ((px_end_dbu + pitch_dbu - 1) / pitch_dbu).max(0) as u32;
 
-            // y is flipped: higher physical y = lower bitmap y
-            let py_end_phys = wy_dbu; // lower physical y edge
-            let py_start_phys = wy_dbu + window_dbu; // upper physical y edge
+            let py_end_phys = wy_dbu;
+            let py_start_phys = wy_dbu + window_dbu;
             let bh = bitmap.height as i32;
             let py_start = (bh - 1 - (py_start_phys / pitch_dbu)).max(0) as u32;
             let py_end = (bh - (py_end_phys / pitch_dbu)).max(0) as u32;
@@ -316,7 +379,6 @@ fn generate_with_density_loop(
                 .min(bitmap.height - py_start);
 
             if rw > 0 && rh > 0 {
-                // Use a tighter threshold (95% of max) to overshoot the fix
                 let tight_max = drc_rules.density_max * 0.95;
                 total_cleared +=
                     enforce_density_region(bitmap, tight_max, px_start, py_start, rw, rh);
@@ -337,10 +399,9 @@ fn generate_with_density_loop(
             total_cleared
         );
 
-        best_rects = generate_polygons(bitmap, pdk, strategy, touching)?;
+        best_rects = generate_polygons(bitmap, pdk, drc_rules, strategy, touching)?;
     }
 
-    // Final density check for logging
     let final_violations =
         check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, Some(1));
     if !final_violations.is_empty() {
@@ -351,6 +412,56 @@ fn generate_with_density_loop(
     }
 
     Ok(best_rects)
+}
+
+/// Run density pre-pass enforcement for a given DRC rule set.
+fn density_prepass(bitmap: &mut ArtworkBitmap, pdk: &PdkConfig, drc: &DrcRules, touching: bool) {
+    let min_w_um = pdk.snap_to_grid(drc.min_width);
+    let eff_s_um = pdk.snap_to_grid(drc.effective_spacing());
+    let pitch_um = if touching {
+        min_w_um
+    } else {
+        min_w_um + eff_s_um
+    };
+    let window_px = (drc.density_window_um / pitch_um).floor() as u32;
+    if window_px > 0 {
+        let cleared = enforce_density(bitmap, drc.density_max, window_px);
+        if cleared > 0 {
+            tracing::info!("Density enforcement: cleared {} pixels", cleared);
+        }
+    }
+}
+
+/// Generate polygons for a single layer with optional density enforcement.
+fn generate_layer_polygons(
+    bitmap: &mut ArtworkBitmap,
+    pdk: &PdkConfig,
+    drc: &DrcRules,
+    strategy: PolygonStrategy,
+    touching: bool,
+    density_enforce: bool,
+) -> Result<Vec<Rect>> {
+    if density_enforce && drc.density_max < 1.0 {
+        density_prepass(bitmap, pdk, drc, touching);
+        generate_with_density_loop(bitmap, pdk, drc, strategy, touching, 3)
+    } else {
+        generate_polygons(bitmap, pdk, drc, strategy, touching)
+    }
+}
+
+fn report_bounds(layer_results: &[(Vec<Rect>, &ArtworkLayerProfile)], pdk: &PdkConfig) {
+    let all_rects: Vec<Rect> = layer_results.iter().flat_map(|(r, _)| r.iter().copied()).collect();
+    if let Some(bb) = bounding_box(&all_rects) {
+        let dbu_per_um = pdk.pdk.db_units_per_um as f64;
+        let w_um = bb.width() as f64 / dbu_per_um;
+        let h_um = bb.height() as f64 / dbu_per_um;
+        tracing::info!(
+            "Artwork bounds: ({:.2}, {:.2}) to ({:.2}, {:.2}) um - {:.1} x {:.1} um ({:.3} x {:.3} mm)",
+            bb.x0 as f64 / dbu_per_um, bb.y0 as f64 / dbu_per_um,
+            bb.x1 as f64 / dbu_per_um, bb.y1 as f64 / dbu_per_um,
+            w_um, h_um, w_um / 1000.0, h_um / 1000.0
+        );
+    }
 }
 
 fn main() -> Result<()> {
@@ -374,65 +485,169 @@ fn main() -> Result<()> {
             touching,
             max_width,
             max_height,
+            size_um,
             invert,
             svg,
             html,
             lef,
             check_drc: do_drc,
             no_density_enforce,
+            color_mode,
+            num_colors,
         } => {
             let pdk = load_pdk(&pdk)?;
-            let mut bitmap = prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
+            let strategy: PolygonStrategy = strategy.into();
+            let density_enforce = !no_density_enforce;
+            let profiles = pdk.layer_profiles();
+            let (max_width, max_height) = if let Some(ref size_str) = size_um {
+                let (pw, ph) = parse_size_um(size_str, &pdk, &profiles[0].drc, touching)?;
+                (Some(max_width.unwrap_or(pw).min(pw)), Some(max_height.unwrap_or(ph).min(ph)))
+            } else {
+                (max_width, max_height)
+            };
+            let max_px = match (max_width, max_height) {
+                (Some(w), Some(h)) => Some((w, h)),
+                (Some(w), None) => Some((w, w)),
+                (None, Some(h)) => Some((h, h)),
+                (None, None) => None,
+            };
+            let thresh = parse_threshold(&threshold);
 
-            tracing::info!(
-                "Bitmap: {}x{}, density: {:.1}%",
-                bitmap.width,
-                bitmap.height,
-                bitmap.density() * 100.0
-            );
+            // Collect per-layer rects and profile references
+            let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
 
-            let density_enforce = !no_density_enforce && pdk.drc.density_max < 1.0;
-            if density_enforce {
-                let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
-                let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
-                let pitch_um = if touching {
-                    min_w_um
-                } else {
-                    min_w_um + min_s_um
-                };
-                let window_px = (pdk.drc.density_window_um / pitch_um).floor() as u32;
-                if window_px > 0 {
-                    let cleared = enforce_density(&mut bitmap, pdk.drc.density_max, window_px);
-                    if cleared > 0 {
-                        tracing::info!("Density enforcement: cleared {} pixels", cleared);
+            match color_mode {
+                ColorModeArg::Single => {
+                    let mut bitmap =
+                        prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
+                    tracing::info!(
+                        "Bitmap: {}x{}, density: {:.1}%",
+                        bitmap.width,
+                        bitmap.height,
+                        bitmap.density() * 100.0
+                    );
+                    let profile = &profiles[0];
+                    let rects = generate_layer_polygons(
+                        &mut bitmap,
+                        &pdk,
+                        &profile.drc,
+                        strategy,
+                        touching,
+                        density_enforce,
+                    )?;
+                    layer_results.push((rects, profile));
+                }
+                ColorModeArg::Channel => {
+                    // Use the most conservative pitch so all layers align spatially
+                    let shared_drc = most_conservative_drc(&profiles);
+                    let layer_bitmaps = extract_channels(&input, &profiles, thresh, max_px)?;
+                    for LayerBitmap {
+                        mut bitmap,
+                        layer_index,
+                    } in layer_bitmaps
+                    {
+                        if invert {
+                            bitmap.invert();
+                        }
+                        let profile = &profiles[layer_index];
+                        let rects = generate_layer_polygons(
+                            &mut bitmap,
+                            &pdk,
+                            &shared_drc,
+                            strategy,
+                            touching,
+                            density_enforce,
+                        )?;
+                        layer_results.push((rects, profile));
+                    }
+                }
+                ColorModeArg::Palette => {
+                    // Use the most conservative pitch so all layers align spatially
+                    let shared_drc = most_conservative_drc(&profiles);
+                    let n = num_colors.unwrap_or(profiles.len());
+                    let layer_bitmaps = extract_palette(&input, n, thresh, max_px)?;
+                    for LayerBitmap {
+                        mut bitmap,
+                        layer_index,
+                    } in layer_bitmaps
+                    {
+                        if invert {
+                            bitmap.invert();
+                        }
+                        let profile = profiles.get(layer_index).unwrap_or(&profiles[0]);
+                        let rects = generate_layer_polygons(
+                            &mut bitmap,
+                            &pdk,
+                            &shared_drc,
+                            strategy,
+                            touching,
+                            density_enforce,
+                        )?;
+                        layer_results.push((rects, profile));
                     }
                 }
             }
 
-            let rects = if density_enforce {
-                generate_with_density_loop(&mut bitmap, &pdk, strategy.into(), touching, 3)?
-            } else {
-                generate_polygons(&bitmap, &pdk, strategy.into(), touching)?
-            };
+            // Report artwork bounds
+            report_bounds(&layer_results, &pdk);
 
+            // DRC check per layer (uses each layer's own rules)
             if do_drc {
-                let drc_rules = pdk.active_drc(false);
-                let violations = check_drc(&rects, pdk.pdk.db_units_per_um, drc_rules);
-                report_drc(&violations);
+                for (rects, profile) in &layer_results {
+                    tracing::info!("DRC check for layer '{}':", profile.name);
+                    let violations = check_drc(rects, pdk.pdk.db_units_per_um, &profile.drc);
+                    report_drc(&violations);
+                }
             }
 
-            write_gds(&rects, &pdk, &cell_name, &output)?;
+            // Write GDS
+            let gds_layers: Vec<LayerRects> = layer_results
+                .iter()
+                .map(|(rects, profile)| LayerRects {
+                    rects,
+                    layer: profile.gds_layer,
+                    datatype: profile.gds_datatype,
+                })
+                .collect();
+            write_gds_multi(&gds_layers, &cell_name, &output)?;
 
+            // LEF
             if let Some(lef_path) = lef {
-                write_lef(&rects, &pdk, &cell_name, &lef_path)?;
+                let lef_layers: Vec<LefLayer> = layer_results
+                    .iter()
+                    .map(|(rects, profile)| LefLayer {
+                        rects,
+                        layer_name: &profile.name,
+                    })
+                    .collect();
+                write_lef_multi(&lef_layers, &pdk, &cell_name, &lef_path)?;
             }
 
+            // SVG
             if let Some(svg_path) = svg {
-                write_svg(&rects, &svg_path, 0.01, "#c0c0c0", Some("#1a1a2e"))?;
+                let svg_layers: Vec<(&[Rect], &str)> = layer_results
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (rects, _))| {
+                        let color = DEFAULT_LAYER_COLORS[i % DEFAULT_LAYER_COLORS.len()];
+                        (rects.as_slice(), color)
+                    })
+                    .collect();
+                write_svg_multi(&svg_layers, &svg_path, 0.01, Some("#1a1a2e"))?;
             }
 
+            // HTML
             if let Some(html_path) = html {
-                write_html_preview(&rects, &html_path, &pdk)?;
+                let html_layers: Vec<HtmlLayer> = layer_results
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (rects, profile))| HtmlLayer {
+                        rects,
+                        name: &profile.name,
+                        color: DEFAULT_LAYER_COLORS[i % DEFAULT_LAYER_COLORS.len()],
+                    })
+                    .collect();
+                write_html_preview_multi(&html_layers, &html_path, &pdk)?;
             }
 
             tracing::info!("Done! Output: {}", output.display());
@@ -451,50 +666,156 @@ fn main() -> Result<()> {
             touching,
             max_width,
             max_height,
+            size_um,
             invert,
             exclusion_margin,
             no_density_enforce,
+            color_mode,
+            num_colors,
         } => {
             let pdk = load_pdk(&pdk)?;
-            let mut bitmap = prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
+            let strategy: PolygonStrategy = strategy.into();
+            let density_enforce = !no_density_enforce;
+            let profiles = pdk.layer_profiles();
+            let (max_width, max_height) = if let Some(ref size_str) = size_um {
+                let (pw, ph) = parse_size_um(size_str, &pdk, &profiles[0].drc, touching)?;
+                (Some(max_width.unwrap_or(pw).min(pw)), Some(max_height.unwrap_or(ph).min(ph)))
+            } else {
+                (max_width, max_height)
+            };
+            let max_px = match (max_width, max_height) {
+                (Some(w), Some(h)) => Some((w, h)),
+                (Some(w), None) => Some((w, w)),
+                (None, Some(h)) => Some((h, h)),
+                (None, None) => None,
+            };
+            let thresh = parse_threshold(&threshold);
 
-            // Apply exclusion zones from existing metal in the chip GDS
-            if let Some(margin_um) = exclusion_margin {
+            let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
+
+            // Read existing metal once for exclusion (shared across all color modes)
+            let exclusion_metal = if exclusion_margin.is_some() {
                 let existing = read_existing_metal(&chip, &pdk, cell.as_deref())?;
-                if !existing.is_empty() {
-                    let margin_dbu = pdk.um_to_dbu(margin_um);
-                    apply_exclusion_mask(&mut bitmap, &existing, &pdk, margin_dbu);
-                }
-            }
-
-            let density_enforce = !no_density_enforce && pdk.drc.density_max < 1.0;
-            if density_enforce {
-                let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
-                let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
-                let pitch_um = if touching {
-                    min_w_um
+                if existing.is_empty() {
+                    None
                 } else {
-                    min_w_um + min_s_um
-                };
-                let window_px = (pdk.drc.density_window_um / pitch_um).floor() as u32;
-                if window_px > 0 {
-                    let cleared = enforce_density(&mut bitmap, pdk.drc.density_max, window_px);
-                    if cleared > 0 {
-                        tracing::info!("Density enforcement: cleared {} pixels", cleared);
+                    Some(existing)
+                }
+            } else {
+                None
+            };
+
+            match color_mode {
+                ColorModeArg::Single => {
+                    let mut bitmap =
+                        prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
+
+                    if let (Some(margin_um), Some(existing)) = (exclusion_margin, &exclusion_metal)
+                    {
+                        let margin_dbu = pdk.um_to_dbu(margin_um);
+                        apply_exclusion_mask(&mut bitmap, existing, &pdk, margin_dbu);
+                    }
+
+                    let profile = &profiles[0];
+                    let rects = generate_layer_polygons(
+                        &mut bitmap,
+                        &pdk,
+                        &profile.drc,
+                        strategy,
+                        touching,
+                        density_enforce,
+                    )?;
+                    layer_results.push((rects, profile));
+                }
+                ColorModeArg::Channel => {
+                    let shared_drc = most_conservative_drc(&profiles);
+                    let layer_bitmaps = extract_channels(&input, &profiles, thresh, max_px)?;
+                    for LayerBitmap {
+                        mut bitmap,
+                        layer_index,
+                    } in layer_bitmaps
+                    {
+                        if invert {
+                            bitmap.invert();
+                        }
+                        if let (Some(margin_um), Some(existing)) =
+                            (exclusion_margin, &exclusion_metal)
+                        {
+                            let margin_dbu = pdk.um_to_dbu(margin_um);
+                            apply_exclusion_mask(&mut bitmap, existing, &pdk, margin_dbu);
+                        }
+                        let profile = &profiles[layer_index];
+                        let rects = generate_layer_polygons(
+                            &mut bitmap,
+                            &pdk,
+                            &shared_drc,
+                            strategy,
+                            touching,
+                            density_enforce,
+                        )?;
+                        layer_results.push((rects, profile));
+                    }
+                }
+                ColorModeArg::Palette => {
+                    let shared_drc = most_conservative_drc(&profiles);
+                    let n = num_colors.unwrap_or(profiles.len());
+                    let layer_bitmaps = extract_palette(&input, n, thresh, max_px)?;
+                    for LayerBitmap {
+                        mut bitmap,
+                        layer_index,
+                    } in layer_bitmaps
+                    {
+                        if invert {
+                            bitmap.invert();
+                        }
+                        if let (Some(margin_um), Some(existing)) =
+                            (exclusion_margin, &exclusion_metal)
+                        {
+                            let margin_dbu = pdk.um_to_dbu(margin_um);
+                            apply_exclusion_mask(&mut bitmap, existing, &pdk, margin_dbu);
+                        }
+                        let profile = profiles.get(layer_index).unwrap_or(&profiles[0]);
+                        let rects = generate_layer_polygons(
+                            &mut bitmap,
+                            &pdk,
+                            &shared_drc,
+                            strategy,
+                            touching,
+                            density_enforce,
+                        )?;
+                        layer_results.push((rects, profile));
                     }
                 }
             }
 
-            let rects = if density_enforce {
-                generate_with_density_loop(&mut bitmap, &pdk, strategy.into(), touching, 3)?
-            } else {
-                generate_polygons(&bitmap, &pdk, strategy.into(), touching)?
-            };
+            // Report artwork bounds
+            report_bounds(&layer_results, &pdk);
 
             let ox = pdk.um_to_dbu(offset_x);
             let oy = pdk.um_to_dbu(offset_y);
 
-            merge_into_gds(&rects, &pdk, &chip, &output, cell.as_deref(), ox, oy)?;
+            let gds_layers: Vec<LayerRects> = layer_results
+                .iter()
+                .map(|(rects, profile)| LayerRects {
+                    rects,
+                    layer: profile.gds_layer,
+                    datatype: profile.gds_datatype,
+                })
+                .collect();
+            merge_into_gds_multi(&gds_layers, &chip, &output, cell.as_deref(), ox, oy)?;
+
+            // Report placed bounds (with offset)
+            if let Some(bb) = layer_results.iter().flat_map(|(r, _)| r.iter()).copied().collect::<Vec<_>>().as_slice().first().and_then(|_| {
+                let all: Vec<Rect> = layer_results.iter().flat_map(|(r, _)| r.iter().map(|rect| Rect::new(rect.x0 + ox, rect.y0 + oy, rect.x1 + ox, rect.y1 + oy))).collect();
+                bounding_box(&all)
+            }) {
+                let dbu_per_um = pdk.pdk.db_units_per_um as f64;
+                tracing::info!(
+                    "Placed artwork bounds: ({:.2}, {:.2}) to ({:.2}, {:.2}) um",
+                    bb.x0 as f64 / dbu_per_um, bb.y0 as f64 / dbu_per_um,
+                    bb.x1 as f64 / dbu_per_um, bb.y1 as f64 / dbu_per_um
+                );
+            }
 
             tracing::info!("Done! Merged artwork into: {}", output.display());
         }

@@ -1,0 +1,59 @@
+# GF180MCU PDK Configuration for fabbula
+# GlobalFoundries 180nm, variant D (5-metal, 1.1µm thick top metal)
+
+[pdk]
+name = "gf180mcu"
+description = "GlobalFoundries GF180MCU 180nm CMOS (variant D, 5-metal)"
+node_nm = 180
+db_units_per_um = 1000
+
+# Top metal layer for artwork — Metal5 (thick top metal)
+[artwork_layer]
+name = "Metal5"
+gds_layer = 81
+gds_datatype = 0
+purpose = "drawing"
+
+[artwork_layer_alt]
+name = "Metal4"
+gds_layer = 46
+gds_datatype = 0
+
+# DRC rules for Metal5
+[drc]
+min_width = 0.44
+min_spacing = 0.46
+min_area = 0.0
+min_enclosed_area = 0.0
+density_min = 0.0
+density_max = 0.80
+density_window_um = 500.0
+
+[grid]
+manufacturing_grid_um = 0.005
+placement_grid_um = 0.56
+
+[[metal_stack]]
+name = "Metal1"
+gds_layer = 34
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal2"
+gds_layer = 36
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal3"
+gds_layer = 42
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal4"
+gds_layer = 46
+gds_datatype = 0
+
+[[metal_stack]]
+name = "Metal5"
+gds_layer = 81
+gds_datatype = 0

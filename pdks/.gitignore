@@ -1,7 +1,10 @@
+# Safely ignore PDKs under NDA
+*.toml
+
 # Track open-source PDK configurations
 !sky130.toml
 !ihp_sg13g2.toml
 !gf180mcu.toml
-
-# Safely ignore PDKs under NDA
-*.toml
+!freepdk45.toml
+!asap7.toml
+!fabbula2.toml

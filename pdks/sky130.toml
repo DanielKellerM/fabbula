@@ -1,0 +1,87 @@
+# SKY130 PDK Configuration for fabbula
+# SkyWater 130nm, 5-metal + local interconnect
+#
+# Sources:
+#   https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+#   https://github.com/google/skywater-pdk/blob/main/docs/rules/periphery/periphery.csv
+#   https://skywater-pdk.readthedocs.io/en/main/rules/layers.html
+
+[pdk]
+name = "sky130"
+description = "SkyWater SKY130 130nm CMOS"
+node_nm = 130
+db_units_per_um = 1000        # 1nm database unit
+
+# Top metal layer for artwork (met5 - aluminum, not Cu CMP)
+[artwork_layer]
+name = "met5"
+gds_layer = 72
+gds_datatype = 20             # met5:drawing
+purpose = "drawing"
+
+# Alternative: use met4 if met5 is reserved for power
+[artwork_layer_alt]
+name = "met4"
+gds_layer = 71
+gds_datatype = 20
+purpose = "drawing"
+
+# DRC rules for the artwork layer (met5 - aluminum)
+# All dimensions in micrometers
+[drc]
+min_width = 1.600             # m5.1: minimum width
+min_spacing = 1.600           # m5.2: minimum spacing
+min_area = 4.000              # m5.4: minimum area (um^2)
+min_enclosed_area = 0.0       # not applicable for met5
+density_min = 0.0             # no minimum density for met5
+density_max = 1.0             # met5 is aluminum (no Cu CMP density limit)
+density_window_um = 700.0     # density check window size
+
+# DRC rules for the alt layer (met4 - copper)
+[drc_alt]
+min_width = 0.300             # m4.1: minimum width
+min_spacing = 0.300           # m4.2: minimum spacing
+min_area = 0.240              # m4.3a: minimum area (um^2)
+min_enclosed_area = 0.0
+density_min = 0.0
+density_max = 0.77            # Cu CMP density limit
+density_window_um = 50.0
+max_width = 10.000            # m4.11: max width before slotting (Cu)
+wide_metal_threshold = 1.500  # "huge_met4" threshold (approx, from layout practice)
+wide_metal_spacing = 0.400    # m4.5a/b: spacing for huge_met4
+
+# Grid snapping
+[grid]
+manufacturing_grid_um = 0.005 # 5nm manufacturing grid
+placement_grid_um = 0.46      # standard cell placement grid (optional)
+
+# Metal stack info (for context / rendering)
+[[metal_stack]]
+name = "li1"
+gds_layer = 67
+gds_datatype = 20
+
+[[metal_stack]]
+name = "met1"
+gds_layer = 68
+gds_datatype = 20
+
+[[metal_stack]]
+name = "met2"
+gds_layer = 69
+gds_datatype = 20
+
+[[metal_stack]]
+name = "met3"
+gds_layer = 70
+gds_datatype = 20
+
+[[metal_stack]]
+name = "met4"
+gds_layer = 71
+gds_datatype = 20
+
+[[metal_stack]]
+name = "met5"
+gds_layer = 72
+gds_datatype = 20

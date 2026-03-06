@@ -1,5 +1,5 @@
 use crate::artwork::ArtworkBitmap;
-use crate::pdk::PdkConfig;
+use crate::pdk::{DrcRules, PdkConfig};
 use anyhow::Result;
 use rayon::prelude::*;
 
@@ -85,25 +85,27 @@ pub enum PolygonStrategy {
 pub fn generate_polygons(
     bitmap: &ArtworkBitmap,
     pdk: &PdkConfig,
+    drc: &DrcRules,
     strategy: PolygonStrategy,
     touching: bool,
 ) -> Result<Vec<Rect>> {
-    let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
-    let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
+    let min_w_um = pdk.snap_to_grid(drc.min_width);
+    let eff_s_um = pdk.snap_to_grid(drc.effective_spacing());
 
     // Pixel pitch: how far apart pixel centers are
     let pitch_um = if touching {
         min_w_um // pixels touch: pitch = width
     } else {
-        min_w_um + min_s_um // pixels separated: guaranteed spacing
+        min_w_um + eff_s_um // pixels separated: guaranteed spacing
     };
 
     let pixel_w_dbu = pdk.um_to_dbu(min_w_um);
     let pitch_dbu = pdk.um_to_dbu(pitch_um);
 
     tracing::info!(
-        "Generating polygons: pixel={}um, pitch={}um ({} dbu), strategy={:?}, touching={}",
+        "Generating polygons: pixel={}um, spacing={}um, pitch={}um ({} dbu), strategy={:?}, touching={}",
         min_w_um,
+        eff_s_um,
         pitch_um,
         pitch_dbu,
         strategy,
@@ -117,8 +119,8 @@ pub fn generate_polygons(
     };
 
     // Filter out polygons that violate min_area
-    let min_area_dbu2 = pdk.um_to_dbu(pdk.drc.min_area.sqrt()).pow(2) as i64;
-    let filtered: Vec<Rect> = if pdk.drc.min_area > 0.0 {
+    let min_area_dbu2 = pdk.um_to_dbu(drc.min_area.sqrt()).pow(2) as i64;
+    let filtered: Vec<Rect> = if drc.min_area > 0.0 {
         raw_rects
             .into_iter()
             .filter(|r| r.area() >= min_area_dbu2)
@@ -300,19 +302,21 @@ fn greedy_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<
 
     if total >= PARALLEL_PIXEL_THRESHOLD {
         // Parallel runs computation - each row is independent
-        runs.par_chunks_mut(w).enumerate().for_each(|(y, row_runs)| {
-            let row_start = y * w;
-            let mut count = 0u16;
-            for x in (0..w).rev() {
-                let bit_idx = row_start + x;
-                if words[bit_idx / 64] & (1u64 << (bit_idx % 64)) != 0 {
-                    count += 1;
-                } else {
-                    count = 0;
+        runs.par_chunks_mut(w)
+            .enumerate()
+            .for_each(|(y, row_runs)| {
+                let row_start = y * w;
+                let mut count = 0u16;
+                for x in (0..w).rev() {
+                    let bit_idx = row_start + x;
+                    if words[bit_idx / 64] & (1u64 << (bit_idx % 64)) != 0 {
+                        count += 1;
+                    } else {
+                        count = 0;
+                    }
+                    row_runs[x] = count;
                 }
-                row_runs[x] = count;
-            }
-        });
+            });
     } else {
         for y in 0..h {
             let row_start = y * w;
@@ -337,7 +341,8 @@ fn greedy_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<
     }
 }
 
-/// Run greedy merge across horizontal strips in parallel
+/// Run greedy merge across horizontal strips in parallel.
+/// Uses thread-local buffers for the `used` bitset to avoid repeated allocation.
 fn greedy_merge_parallel_strips(
     words: &[u64],
     runs: &[u16],
@@ -346,6 +351,12 @@ fn greedy_merge_parallel_strips(
     pixel_w: i32,
     pitch: i32,
 ) -> Vec<Rect> {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static USED_BUF: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    }
+
     let num_strips = h.div_ceil(STRIP_HEIGHT);
     (0..num_strips)
         .into_par_iter()
@@ -353,7 +364,19 @@ fn greedy_merge_parallel_strips(
             let y_start = strip_idx * STRIP_HEIGHT;
             let y_end = (y_start + STRIP_HEIGHT).min(h);
             let strip_h = y_end - y_start;
-            greedy_merge_strip(words, runs, w, y_start, strip_h, h, pixel_w, pitch)
+            USED_BUF.with(|buf| {
+                greedy_merge_strip_reuse(
+                    words,
+                    runs,
+                    w,
+                    y_start,
+                    strip_h,
+                    h,
+                    pixel_w,
+                    pitch,
+                    &mut buf.borrow_mut(),
+                )
+            })
         })
         .collect()
 }
@@ -374,6 +397,45 @@ fn greedy_merge_strip(
 ) -> Vec<Rect> {
     let strip_pixels = strip_h * w;
     let mut used = vec![0u64; strip_pixels.div_ceil(64)];
+    greedy_merge_strip_inner(
+        words, runs, w, y_start, strip_h, total_h, pixel_w, pitch, &mut used,
+    )
+}
+
+/// Greedy merge reusing a caller-provided `used` buffer (resized and zeroed as needed).
+#[allow(clippy::too_many_arguments)]
+fn greedy_merge_strip_reuse(
+    words: &[u64],
+    runs: &[u16],
+    w: usize,
+    y_start: usize,
+    strip_h: usize,
+    total_h: usize,
+    pixel_w: i32,
+    pitch: i32,
+    used: &mut Vec<u64>,
+) -> Vec<Rect> {
+    let needed = (strip_h * w).div_ceil(64);
+    used.resize(needed, 0);
+    used.fill(0);
+    greedy_merge_strip_inner(
+        words, runs, w, y_start, strip_h, total_h, pixel_w, pitch, used,
+    )
+}
+
+/// Core greedy merge logic operating on a pre-allocated `used` bitset.
+#[allow(clippy::too_many_arguments)]
+fn greedy_merge_strip_inner(
+    words: &[u64],
+    runs: &[u16],
+    w: usize,
+    y_start: usize,
+    strip_h: usize,
+    total_h: usize,
+    pixel_w: i32,
+    pitch: i32,
+    used: &mut [u64],
+) -> Vec<Rect> {
     let mut rects = Vec::new();
 
     for sy in 0..strip_h {
@@ -390,8 +452,7 @@ fn greedy_merge_strip(
 
             // Find widest rectangle extending down within this strip
             let run_raw = runs[gy * w + x] as usize;
-            let mut min_run =
-                effective_run_word_scan(&used, sy * w + x, run_raw);
+            let mut min_run = effective_run_word_scan(used, sy * w + x, run_raw);
             let mut best_area = 0u64;
             let mut best_w = 0u16;
             let mut best_h = 0u32;
@@ -409,8 +470,7 @@ fn greedy_merge_strip(
                 }
 
                 let row_run = runs[global_idx] as usize;
-                min_run =
-                    min_run.min(effective_run_word_scan(&used, strip_idx, row_run));
+                min_run = min_run.min(effective_run_word_scan(used, strip_idx, row_run));
                 let area = min_run as u64 * (dy as u64 + 1);
                 if area > best_area {
                     best_area = area;
@@ -422,7 +482,7 @@ fn greedy_merge_strip(
             // Mark used with bulk word-level operations
             for dy in 0..best_h as usize {
                 let row_off = (sy + dy) * w;
-                bulk_set_bits(&mut used, row_off + x, best_w as usize);
+                bulk_set_bits(used, row_off + x, best_w as usize);
             }
 
             // Create rectangle

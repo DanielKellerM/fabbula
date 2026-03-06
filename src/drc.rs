@@ -224,16 +224,15 @@ pub fn check_drc_capped(
                         location: loc,
                     })
                 });
-                let area_v = (min_area_dbu2 > 0 && r.area() < min_area_dbu2).then(|| {
-                    DrcViolation {
+                let area_v =
+                    (min_area_dbu2 > 0 && r.area() < min_area_dbu2).then(|| DrcViolation {
                         rule: DrcRule::MinArea,
                         rect_index: idx,
                         other_index: 0,
                         value: r.area(),
                         limit: min_area_dbu2,
                         location: loc,
-                    }
-                });
+                    });
                 width_v
                     .into_iter()
                     .chain(height_v)
@@ -389,13 +388,7 @@ pub fn check_drc_capped(
     }
 
     // Density check using SAT (no longer needs R-tree)
-    check_density(
-        rects,
-        db_units_per_um,
-        drc,
-        &mut violations,
-        max_violations,
-    );
+    check_density(rects, db_units_per_um, drc, &mut violations, max_violations);
 
     violations
 }
@@ -443,6 +436,8 @@ fn check_density(
     }
 
     // Rasterize: compute metal area per grid cell
+    // Interior/border split: fully covered cells get step*step directly.
+    let full_cell_area = step as i64 * step as i64;
     let mut grid = vec![0i64; grid_w * grid_h];
     for r in rects {
         let gx0 = ((r.x0 - grid_x0) / step).max(0) as usize;
@@ -452,15 +447,27 @@ fn check_density(
         let gx1 = gx1.min(grid_w);
         let gy1 = gy1.min(grid_h);
 
+        // Interior range: cells fully covered by rect (no clipping needed)
+        let igx0 = ((r.x0 - grid_x0 + step - 1) / step).max(0) as usize;
+        let igy0 = ((r.y0 - grid_y0 + step - 1) / step).max(0) as usize;
+        let igx1 = ((r.x1 - grid_x0) / step).max(0) as usize;
+        let igy1 = ((r.y1 - grid_y0) / step).max(0) as usize;
+        let igx1 = igx1.min(grid_w);
+        let igy1 = igy1.min(grid_h);
+
         for gy in gy0..gy1 {
+            let is_interior_y = gy >= igy0 && gy < igy1;
             for gx in gx0..gx1 {
-                // Clip rect to cell boundaries for exact area
-                let cx0 = (grid_x0 + gx as i32 * step).max(r.x0);
-                let cy0 = (grid_y0 + gy as i32 * step).max(r.y0);
-                let cx1 = (grid_x0 + (gx as i32 + 1) * step).min(r.x1);
-                let cy1 = (grid_y0 + (gy as i32 + 1) * step).min(r.y1);
-                if cx1 > cx0 && cy1 > cy0 {
-                    grid[gy * grid_w + gx] += (cx1 - cx0) as i64 * (cy1 - cy0) as i64;
+                if is_interior_y && gx >= igx0 && gx < igx1 {
+                    grid[gy * grid_w + gx] += full_cell_area;
+                } else {
+                    let cx0 = (grid_x0 + gx as i32 * step).max(r.x0);
+                    let cy0 = (grid_y0 + gy as i32 * step).max(r.y0);
+                    let cx1 = (grid_x0 + (gx as i32 + 1) * step).min(r.x1);
+                    let cy1 = (grid_y0 + (gy as i32 + 1) * step).min(r.y1);
+                    if cx1 > cx0 && cy1 > cy0 {
+                        grid[gy * grid_w + gx] += (cx1 - cx0) as i64 * (cy1 - cy0) as i64;
+                    }
                 }
             }
         }
@@ -484,29 +491,25 @@ fn check_density(
     let use_parallel = rects.len() >= PARALLEL_RECT_THRESHOLD && max_violations.is_none();
 
     if use_parallel {
-        // Build all (wx, wy) positions
-        let mut positions = Vec::new();
-        let mut wx = bb.x0;
-        while wx + window_dbu <= bb.x1 {
-            let mut wy = bb.y0;
-            while wy + window_dbu <= bb.y1 {
-                positions.push((wx, wy));
-                wy += step;
-            }
-            wx += step;
-        }
+        // Compute window grid dimensions for allocation-free parallel iteration
+        let nx = ((bb.x1 - bb.x0 - window_dbu) / step + 1).max(0) as usize;
+        let ny = ((bb.y1 - bb.y0 - window_dbu) / step + 1).max(0) as usize;
 
-        let density_violations: Vec<DrcViolation> = positions
-            .par_iter()
-            .flat_map_iter(|&(wx, wy)| {
+        let density_violations: Vec<DrcViolation> = (0..nx * ny)
+            .into_par_iter()
+            .flat_map_iter(|idx| {
+                let ix = idx / ny;
+                let iy = idx % ny;
+                let wx = bb.x0 + ix as i32 * step;
+                let wy = bb.y0 + iy as i32 * step;
                 let gx0 = ((wx - grid_x0) / step) as usize;
                 let gy0 = ((wy - grid_y0) / step) as usize;
                 let gx1 = (gx0 + window_cells).min(grid_w);
                 let gy1 = (gy0 + window_cells).min(grid_h);
 
-                let metal_area = sat[gy1 * sat_w + gx1] - sat[gy0 * sat_w + gx1]
-                    - sat[gy1 * sat_w + gx0]
-                    + sat[gy0 * sat_w + gx0];
+                let metal_area =
+                    sat[gy1 * sat_w + gx1] - sat[gy0 * sat_w + gx1] - sat[gy1 * sat_w + gx0]
+                        + sat[gy0 * sat_w + gx0];
 
                 let max_v = (metal_area > max_metal).then(|| DrcViolation {
                     rule: DrcRule::DensityMax,
@@ -542,9 +545,9 @@ fn check_density(
                 let gx1 = (gx0 + window_cells).min(grid_w);
                 let gy1 = (gy0 + window_cells).min(grid_h);
 
-                let metal_area = sat[gy1 * sat_w + gx1] - sat[gy0 * sat_w + gx1]
-                    - sat[gy1 * sat_w + gx0]
-                    + sat[gy0 * sat_w + gx0];
+                let metal_area =
+                    sat[gy1 * sat_w + gx1] - sat[gy0 * sat_w + gx1] - sat[gy1 * sat_w + gx0]
+                        + sat[gy0 * sat_w + gx0];
 
                 if metal_area > max_metal {
                     let density_permille = metal_area * 1000 / window_area_i64;
@@ -587,13 +590,7 @@ pub fn check_density_only(
     if drc.density_max >= 1.0 && drc.density_min <= 0.0 {
         return violations;
     }
-    check_density(
-        rects,
-        db_units_per_um,
-        drc,
-        &mut violations,
-        max_violations,
-    );
+    check_density(rects, db_units_per_um, drc, &mut violations, max_violations);
     violations
 }
 

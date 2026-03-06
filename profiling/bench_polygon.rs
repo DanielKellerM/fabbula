@@ -21,7 +21,13 @@ fn bench_greedy_merge_256(c: &mut Criterion) {
     let pdk = PdkConfig::builtin("sky130").unwrap();
     c.bench_function("greedy_merge_256", |b| {
         b.iter(|| {
-            let _ = generate_polygons(black_box(&bmp), &pdk, PolygonStrategy::GreedyMerge, false);
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::GreedyMerge,
+                false,
+            );
         });
     });
 }
@@ -31,7 +37,13 @@ fn bench_greedy_merge_512(c: &mut Criterion) {
     let pdk = PdkConfig::builtin("sky130").unwrap();
     c.bench_function("greedy_merge_512", |b| {
         b.iter(|| {
-            let _ = generate_polygons(black_box(&bmp), &pdk, PolygonStrategy::GreedyMerge, false);
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::GreedyMerge,
+                false,
+            );
         });
     });
 }
@@ -41,7 +53,13 @@ fn bench_row_merge_512(c: &mut Criterion) {
     let pdk = PdkConfig::builtin("sky130").unwrap();
     c.bench_function("row_merge_512", |b| {
         b.iter(|| {
-            let _ = generate_polygons(black_box(&bmp), &pdk, PolygonStrategy::RowMerge, false);
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::RowMerge,
+                false,
+            );
         });
     });
 }
@@ -51,7 +69,13 @@ fn bench_pixel_rects_512(c: &mut Criterion) {
     let pdk = PdkConfig::builtin("sky130").unwrap();
     c.bench_function("pixel_rects_512", |b| {
         b.iter(|| {
-            let _ = generate_polygons(black_box(&bmp), &pdk, PolygonStrategy::PixelRects, false);
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::PixelRects,
+                false,
+            );
         });
     });
 }
@@ -61,7 +85,13 @@ fn bench_greedy_merge_2048(c: &mut Criterion) {
     let pdk = PdkConfig::builtin("sky130").unwrap();
     c.bench_function("greedy_merge_2048", |b| {
         b.iter(|| {
-            let _ = generate_polygons(black_box(&bmp), &pdk, PolygonStrategy::GreedyMerge, false);
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::GreedyMerge,
+                false,
+            );
         });
     });
 }
@@ -71,7 +101,13 @@ fn bench_row_merge_2048(c: &mut Criterion) {
     let pdk = PdkConfig::builtin("sky130").unwrap();
     c.bench_function("row_merge_2048", |b| {
         b.iter(|| {
-            let _ = generate_polygons(black_box(&bmp), &pdk, PolygonStrategy::RowMerge, false);
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::RowMerge,
+                false,
+            );
         });
     });
 }
@@ -81,7 +117,13 @@ fn bench_greedy_merge_4096(c: &mut Criterion) {
     let pdk = PdkConfig::builtin("sky130").unwrap();
     c.bench_function("greedy_merge_4096", |b| {
         b.iter(|| {
-            let _ = generate_polygons(black_box(&bmp), &pdk, PolygonStrategy::GreedyMerge, false);
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::GreedyMerge,
+                false,
+            );
         });
     });
 }

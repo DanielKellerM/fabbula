@@ -51,6 +51,16 @@ impl ArtworkBitmap {
         &self.pixels
     }
 
+    /// Return the packed word slice and the bit offset of the first pixel for row `y`.
+    #[inline]
+    pub fn row_words(&self, y: u32) -> (&[u64], usize) {
+        let bit_start = (y as usize) * (self.width as usize);
+        let bit_end = bit_start + self.width as usize;
+        let word_start = bit_start / 64;
+        let word_end = bit_end.div_ceil(64);
+        (&self.pixels[word_start..word_end], bit_start % 64)
+    }
+
     #[inline]
     pub fn get(&self, x: u32, y: u32) -> bool {
         if x >= self.width || y >= self.height {
@@ -328,9 +338,14 @@ pub fn enforce_density(bitmap: &mut ArtworkBitmap, density_max: f64, window_pixe
     let mut total_cleared = 0usize;
     let max_iters = 20u32;
 
+    // Pre-allocate SAT buffer and reuse across iterations
+    let stride = (w + 1) as usize;
+    let mut sat = vec![0u32; stride * (h + 1) as usize];
+    let mut min_dirty_y = 0u32; // First row that needs SAT rebuild
+
     for _iter in 0..max_iters {
-        // Build summed-area table
-        let sat = build_sat(bitmap, w, h);
+        // Incremental SAT rebuild: only recompute from min_dirty_y
+        build_sat_from(bitmap, w, h, &mut sat, min_dirty_y);
 
         // Find violating windows, sorted worst-first
         let mut violations: Vec<(u32, u32, u32)> = Vec::new(); // (count, wx, wy)
@@ -355,6 +370,7 @@ pub fn enforce_density(bitmap: &mut ArtworkBitmap, density_max: f64, window_pixe
         violations.sort_unstable_by(|a, b| b.0.cmp(&a.0));
 
         let mut cleared_this_iter = 0usize;
+        min_dirty_y = h; // Track earliest modified row for next iteration
 
         for &(_count, vx, vy) in &violations {
             // Recount since previous removals in this iteration may have helped
@@ -391,6 +407,7 @@ pub fn enforce_density(bitmap: &mut ArtworkBitmap, density_max: f64, window_pixe
                     bitmap.set(px, py, false);
                     removed += 1;
                     cleared_this_iter += 1;
+                    min_dirty_y = min_dirty_y.min(py);
                 }
             }
         }
@@ -405,19 +422,50 @@ pub fn enforce_density(bitmap: &mut ArtworkBitmap, density_max: f64, window_pixe
 }
 
 /// Build a summed-area table over the bitmap. SAT has dimensions (w+1) x (h+1).
-fn build_sat(bitmap: &ArtworkBitmap, w: u32, h: u32) -> Vec<u32> {
+/// Uses word-level iteration over packed u64 words to avoid per-pixel bounds checks.
+pub fn build_sat(bitmap: &ArtworkBitmap, w: u32, h: u32) -> Vec<u32> {
     let stride = (w + 1) as usize;
     let mut sat = vec![0u32; stride * (h + 1) as usize];
+    build_sat_from(bitmap, w, h, &mut sat, 0);
+    sat
+}
 
-    for y in 0..h {
+/// Build SAT rows starting from `start_y`, reusing the provided buffer.
+/// Rows before `start_y` are assumed to already be correct in `sat`.
+fn build_sat_from(bitmap: &ArtworkBitmap, w: u32, h: u32, sat: &mut [u32], start_y: u32) {
+    let stride = (w + 1) as usize;
+    let w_usize = w as usize;
+
+    for y in start_y..h {
+        let (row_words, bit_offset) = bitmap.row_words(y);
+        let sat_row = (y + 1) as usize * stride;
+        let sat_prev_row = y as usize * stride;
         let mut row_sum = 0u32;
-        for x in 0..w {
-            row_sum += bitmap.get(x, y) as u32;
-            let idx = (y + 1) as usize * stride + (x + 1) as usize;
-            sat[idx] = row_sum + sat[y as usize * stride + (x + 1) as usize];
+        let mut x = 0usize;
+
+        // Process bits using word-level extraction
+        let mut word_idx = 0usize;
+        let mut bit_in_word = bit_offset;
+
+        while x < w_usize {
+            let word = row_words[word_idx];
+            // How many pixels can we extract from this word?
+            let bits_left_in_word = 64 - bit_in_word;
+            let pixels_left = w_usize - x;
+            let count = bits_left_in_word.min(pixels_left);
+
+            // Extract `count` bits starting at `bit_in_word`
+            let shifted = word >> bit_in_word;
+            for b in 0..count {
+                row_sum += ((shifted >> b) & 1) as u32;
+                sat[sat_row + x + b + 1] = row_sum + sat[sat_prev_row + x + b + 1];
+            }
+
+            x += count;
+            word_idx += 1;
+            bit_in_word = 0;
         }
     }
-    sat
 }
 
 /// Query the SAT for the count of on-pixels in [x0, x1) x [y0, y1).
@@ -432,11 +480,43 @@ fn sat_query(sat: &[u32], w: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> u32 {
 }
 
 /// Direct count of on-pixels in a rectangular window (used for recount after partial removals).
-fn count_on_in_window(bitmap: &ArtworkBitmap, wx: u32, wy: u32, win_w: u32, win_h: u32) -> u32 {
+/// Uses word-level iteration to avoid per-pixel bounds checks and division.
+pub fn count_on_in_window(bitmap: &ArtworkBitmap, wx: u32, wy: u32, win_w: u32, win_h: u32) -> u32 {
     let mut count = 0u32;
+    let bw = bitmap.width as usize;
+    let words = bitmap.words();
+
     for y in wy..wy + win_h {
-        for x in wx..wx + win_w {
-            count += bitmap.get(x, y) as u32;
+        let row_bit_start = y as usize * bw + wx as usize;
+        let row_bit_end = row_bit_start + win_w as usize;
+
+        let first_word = row_bit_start / 64;
+        let last_word = (row_bit_end - 1) / 64;
+        let first_bit = row_bit_start % 64;
+        let last_bit_incl = (row_bit_end - 1) % 64;
+
+        if first_word == last_word {
+            // All bits in one word
+            let mask = (if last_bit_incl == 63 {
+                !0u64
+            } else {
+                (1u64 << (last_bit_incl + 1)) - 1
+            }) & (!0u64 << first_bit);
+            count += (words[first_word] & mask).count_ones();
+        } else {
+            // First partial word
+            count += (words[first_word] & (!0u64 << first_bit)).count_ones();
+            // Full interior words
+            for w in &words[first_word + 1..last_word] {
+                count += w.count_ones();
+            }
+            // Last partial word
+            let last_mask = if last_bit_incl == 63 {
+                !0u64
+            } else {
+                (1u64 << (last_bit_incl + 1)) - 1
+            };
+            count += (words[last_word] & last_mask).count_ones();
         }
     }
     count
