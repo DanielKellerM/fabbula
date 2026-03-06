@@ -24,7 +24,7 @@ gds_datatype = 0
 [drc]
 min_width = 1.8
 min_spacing = 1.8
-min_area = 0.0                # check actual PDK rules
+min_area = 0.0            # check actual PDK rules
 min_enclosed_area = 0.0
 density_min = 0.0
 density_max = 0.80

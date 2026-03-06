@@ -1,7 +1,16 @@
-use crate::pdk::{um_to_dbu, DrcRules};
-use crate::polygon::{bounding_box, Rect};
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Design rule checking with R-tree spatial indexing.
+//!
+//! Validates generated polygons against PDK design rules: minimum/maximum width,
+//! minimum spacing, wide-metal spacing, minimum area, and metal density.
+
+use crate::pdk::{DrcRules, um_to_dbu};
+use crate::polygon::{Rect, bounding_box};
 use rayon::prelude::*;
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{AABB, RTree, RTreeObject};
 
 const PARALLEL_RECT_THRESHOLD: usize = 5_000;
 
@@ -268,17 +277,17 @@ pub fn check_drc_capped(
                     location: loc,
                 });
             }
-            if let Some(max_w) = max_w_dbu {
-                if r.width() > max_w || r.height() > max_w {
-                    violations.push(DrcViolation {
-                        rule: DrcRule::MaxWidth,
-                        rect_index: idx,
-                        other_index: 0,
-                        value: r.width().max(r.height()) as i64,
-                        limit: max_w as i64,
-                        location: loc,
-                    });
-                }
+            if let Some(max_w) = max_w_dbu
+                && (r.width() > max_w || r.height() > max_w)
+            {
+                violations.push(DrcViolation {
+                    rule: DrcRule::MaxWidth,
+                    rect_index: idx,
+                    other_index: 0,
+                    value: r.width().max(r.height()) as i64,
+                    limit: max_w as i64,
+                    location: loc,
+                });
             }
             if min_area_dbu2 > 0 && r.area() < min_area_dbu2 {
                 violations.push(DrcViolation {

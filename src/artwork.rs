@@ -1,11 +1,21 @@
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Image loading, thresholding, and density enforcement.
+//!
+//! Provides [`load_artwork`] for converting raster images into binary bitmaps,
+//! [`apply_exclusion_mask`] for masking out reserved regions, and
+//! [`enforce_density`] for satisfying maximum metal density DRC rules.
+
 use crate::pdk::PdkConfig;
 use anyhow::{Context, Result};
 use image::{GenericImageView, Luma};
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{AABB, RTree, RTreeObject};
 use std::path::Path;
 
 /// A binary bitmap where true = metal, false = gap.
-/// Stored as a packed bitset (Vec<u64>) for cache efficiency.
+/// Stored as a packed bitset (`Vec<u64>`) for cache efficiency.
 #[derive(Debug, Clone)]
 pub struct ArtworkBitmap {
     pub width: u32,
@@ -61,6 +71,7 @@ impl ArtworkBitmap {
         (&self.pixels[word_start..word_end], bit_start % 64)
     }
 
+    /// Returns the value of the pixel at `(x, y)`. Out-of-bounds coordinates return `false`.
     #[inline]
     pub fn get(&self, x: u32, y: u32) -> bool {
         if x >= self.width || y >= self.height {
@@ -70,6 +81,7 @@ impl ArtworkBitmap {
         self.pixels[i / 64] & (1u64 << (i % 64)) != 0
     }
 
+    /// Sets the pixel at `(x, y)` to `val`. Out-of-bounds coordinates are ignored.
     pub fn set(&mut self, x: u32, y: u32, val: bool) {
         if x < self.width && y < self.height {
             let i = (y * self.width + x) as usize;
@@ -702,7 +714,7 @@ mod tests {
 
     #[test]
     fn test_bitset_exact_64_width() {
-        let bmp = ArtworkBitmap::from_bools(64, 1, &vec![true; 64]);
+        let bmp = ArtworkBitmap::from_bools(64, 1, &[true; 64]);
         assert_eq!(bmp.metal_count(), 64);
     }
 
@@ -717,7 +729,7 @@ mod tests {
         let pw = pdk.um_to_dbu(min_w_um);
 
         // 4x4 bitmap, all on
-        let mut bmp = ArtworkBitmap::from_bools(4, 4, &vec![true; 16]);
+        let mut bmp = ArtworkBitmap::from_bools(4, 4, &[true; 16]);
 
         // Exclusion rect covering pixel (1, 0) in bitmap coords
         // Pixel (1, 0) maps to physical: x=[1*pitch, 1*pitch+pw], y=[(4-1-0)*pitch, 3*pitch+pw]
@@ -739,7 +751,7 @@ mod tests {
         let pitch = pdk.um_to_dbu(min_w_um + min_s_um);
         let pw = pdk.um_to_dbu(min_w_um);
 
-        let mut bmp = ArtworkBitmap::from_bools(4, 4, &vec![true; 16]);
+        let mut bmp = ArtworkBitmap::from_bools(4, 4, &[true; 16]);
 
         // Small exclusion rect; with large margin it should catch neighbors
         let excl = vec![Rect::new(

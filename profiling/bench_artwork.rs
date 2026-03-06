@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use fabbula::artwork::{enforce_density, ArtworkBitmap};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use fabbula::artwork::{ArtworkBitmap, enforce_density};
 
 fn solid_bitmap(size: u32) -> ArtworkBitmap {
     ArtworkBitmap::from_bools(size, size, &vec![true; (size * size) as usize])
@@ -10,7 +10,7 @@ fn dense_bitmap(size: u32) -> ArtworkBitmap {
         .map(|i| {
             let x = i % size;
             let y = i / size;
-            (x + y) % 5 != 0
+            !(x + y).is_multiple_of(5)
         })
         .collect();
     ArtworkBitmap::from_bools(size, size, &bools)

@@ -1,3 +1,12 @@
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+//! LEF macro output for place-and-route tools.
+//!
+//! Generates LEF MACRO definitions for integration with OpenLane, OpenROAD,
+//! and other digital implementation flows.
+
 use crate::pdk::PdkConfig;
 use crate::polygon::Rect;
 use anyhow::{Context, Result};

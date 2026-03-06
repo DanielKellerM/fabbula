@@ -1,3 +1,12 @@
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+//! PDK configuration loading and built-in PDK support.
+//!
+//! Loads process design kit parameters from TOML files or built-in definitions.
+//! Provides unit conversion ([`PdkConfig::um_to_dbu`]) and grid snapping.
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
@@ -68,10 +77,9 @@ impl DrcRules {
     pub fn effective_spacing(&self) -> f64 {
         if let (Some(threshold), Some(wide_spacing)) =
             (self.wide_metal_threshold, self.wide_metal_spacing)
+            && threshold <= self.min_width * 2.0
         {
-            if threshold <= self.min_width * 2.0 {
-                return wide_spacing.max(self.min_spacing);
-            }
+            return wide_spacing.max(self.min_spacing);
         }
         self.min_spacing
     }
@@ -164,7 +172,14 @@ impl PdkConfig {
 
     /// List available built-in PDKs
     pub fn list_builtins() -> &'static [&'static str] {
-        &["sky130", "ihp_sg13g2", "gf180mcu", "freepdk45", "asap7", "fabbula2"]
+        &[
+            "sky130",
+            "ihp_sg13g2",
+            "gf180mcu",
+            "freepdk45",
+            "asap7",
+            "fabbula2",
+        ]
     }
 
     /// Return the DRC rules for the active layer.
@@ -195,7 +210,7 @@ impl PdkConfig {
             color: None,
             drc: self.drc.clone(),
         }];
-        if let (Some(ref alt_layer), Some(ref alt_drc)) = (&self.artwork_layer_alt, &self.drc_alt) {
+        if let (Some(alt_layer), Some(alt_drc)) = (&self.artwork_layer_alt, &self.drc_alt) {
             profiles.push(ArtworkLayerProfile {
                 name: alt_layer.name.clone(),
                 gds_layer: alt_layer.gds_layer,

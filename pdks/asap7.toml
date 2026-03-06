@@ -13,7 +13,7 @@
 name = "asap7"
 description = "ASAP7 - ASU/ARM 7nm FinFET virtual PDK"
 node_nm = 7
-db_units_per_um = 1000        # 1nm database unit
+db_units_per_um = 1000                                 # 1nm database unit
 
 # Top metal layer for artwork (M9 - thickest routing layer)
 [artwork_layer]
@@ -32,19 +32,19 @@ purpose = "drawing"
 # DRC rules for the artwork layer (M9)
 # All dimensions in micrometers (1x scale, not 4x)
 [drc]
-min_width = 0.040             # 40nm minimum width (from 1x LEF)
-min_spacing = 0.040           # 40nm minimum spacing (pitch 80nm - width 40nm)
-min_area = 0.008              # ~0.00752 um^2 (from LEF AREA rule, rounded up)
+min_width = 0.040         # 40nm minimum width (from 1x LEF)
+min_spacing = 0.040       # 40nm minimum spacing (pitch 80nm - width 40nm)
+min_area = 0.008          # ~0.00752 um^2 (from LEF AREA rule, rounded up)
 min_enclosed_area = 0.0
 density_min = 0.0
-density_max = 0.80            # typical density limit
+density_max = 0.80        # typical density limit
 density_window_um = 500.0
-max_width = 2.0               # 2.0 um max width (from LEF MAXWIDTH)
+max_width = 2.0           # 2.0 um max width (from LEF MAXWIDTH)
 
 # DRC rules for the alt layer (M8 - same rules as M9)
 [drc_alt]
-min_width = 0.040             # 40nm minimum width
-min_spacing = 0.040           # 40nm minimum spacing
+min_width = 0.040         # 40nm minimum width
+min_spacing = 0.040       # 40nm minimum spacing
 min_area = 0.008
 min_enclosed_area = 0.0
 density_min = 0.0

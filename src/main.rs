@@ -1,19 +1,23 @@
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
 use fabbula::artwork::{
-    apply_exclusion_mask, enforce_density, enforce_density_region, load_artwork, ArtworkBitmap,
-    ThresholdMode,
+    ArtworkBitmap, ThresholdMode, apply_exclusion_mask, enforce_density, enforce_density_region,
+    load_artwork,
 };
-use fabbula::color::{extract_channels, extract_palette, LayerBitmap};
-use fabbula::drc::{check_density_only, check_drc, report_drc, DrcRule};
-use fabbula::gdsio::{merge_into_gds_multi, read_existing_metal, write_gds_multi, LayerRects};
-use fabbula::lef::{write_lef_multi, LefLayer};
+use fabbula::color::{LayerBitmap, extract_channels, extract_palette};
+use fabbula::drc::{DrcRule, check_density_only, check_drc, report_drc};
+use fabbula::gdsio::{LayerRects, merge_into_gds_multi, read_existing_metal, write_gds_multi};
+use fabbula::lef::{LefLayer, write_lef_multi};
 use fabbula::pdk::{ArtworkLayerProfile, DrcRules, PdkConfig};
-use fabbula::polygon::{bounding_box, generate_polygons, PolygonStrategy, Rect};
+use fabbula::polygon::{PolygonStrategy, Rect, bounding_box, generate_polygons};
 use fabbula::preview::{
-    write_html_preview_multi, write_svg_multi, HtmlLayer, DEFAULT_LAYER_COLORS,
+    DEFAULT_LAYER_COLORS, HtmlLayer, write_html_preview_multi, write_svg_multi,
 };
 
 #[derive(Parser)]
@@ -275,21 +279,40 @@ fn parse_threshold(s: &str) -> ThresholdMode {
 /// Parse a "WxH" size string in micrometers and convert to pixel dimensions using PDK pitch.
 fn parse_size_um(s: &str, pdk: &PdkConfig, drc: &DrcRules, touching: bool) -> Result<(u32, u32)> {
     let parts: Vec<&str> = s.split('x').collect();
-    anyhow::ensure!(parts.len() == 2, "size-um must be in WxH format (e.g. 2000x2000)");
-    let w_um: f64 = parts[0].parse().map_err(|_| anyhow::anyhow!("Invalid width in size-um"))?;
-    let h_um: f64 = parts[1].parse().map_err(|_| anyhow::anyhow!("Invalid height in size-um"))?;
+    anyhow::ensure!(
+        parts.len() == 2,
+        "size-um must be in WxH format (e.g. 2000x2000)"
+    );
+    let w_um: f64 = parts[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid width in size-um"))?;
+    let h_um: f64 = parts[1]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid height in size-um"))?;
 
     let min_w_um = pdk.snap_to_grid(drc.min_width);
     let eff_s_um = pdk.snap_to_grid(drc.effective_spacing());
-    let pitch_um = if touching { min_w_um } else { min_w_um + eff_s_um };
+    let pitch_um = if touching {
+        min_w_um
+    } else {
+        min_w_um + eff_s_um
+    };
 
     let px_w = (w_um / pitch_um).floor() as u32;
     let px_h = (h_um / pitch_um).floor() as u32;
-    anyhow::ensure!(px_w > 0 && px_h > 0, "size-um too small for PDK pitch ({}um)", pitch_um);
+    anyhow::ensure!(
+        px_w > 0 && px_h > 0,
+        "size-um too small for PDK pitch ({}um)",
+        pitch_um
+    );
 
     tracing::info!(
         "size-um: {:.1}x{:.1} um -> {}x{} pixels (pitch={:.3} um)",
-        w_um, h_um, px_w, px_h, pitch_um
+        w_um,
+        h_um,
+        px_w,
+        px_h,
+        pitch_um
     );
     Ok((px_w, px_h))
 }
@@ -450,16 +473,24 @@ fn generate_layer_polygons(
 }
 
 fn report_bounds(layer_results: &[(Vec<Rect>, &ArtworkLayerProfile)], pdk: &PdkConfig) {
-    let all_rects: Vec<Rect> = layer_results.iter().flat_map(|(r, _)| r.iter().copied()).collect();
+    let all_rects: Vec<Rect> = layer_results
+        .iter()
+        .flat_map(|(r, _)| r.iter().copied())
+        .collect();
     if let Some(bb) = bounding_box(&all_rects) {
         let dbu_per_um = pdk.pdk.db_units_per_um as f64;
         let w_um = bb.width() as f64 / dbu_per_um;
         let h_um = bb.height() as f64 / dbu_per_um;
         tracing::info!(
             "Artwork bounds: ({:.2}, {:.2}) to ({:.2}, {:.2}) um - {:.1} x {:.1} um ({:.3} x {:.3} mm)",
-            bb.x0 as f64 / dbu_per_um, bb.y0 as f64 / dbu_per_um,
-            bb.x1 as f64 / dbu_per_um, bb.y1 as f64 / dbu_per_um,
-            w_um, h_um, w_um / 1000.0, h_um / 1000.0
+            bb.x0 as f64 / dbu_per_um,
+            bb.y0 as f64 / dbu_per_um,
+            bb.x1 as f64 / dbu_per_um,
+            bb.y1 as f64 / dbu_per_um,
+            w_um,
+            h_um,
+            w_um / 1000.0,
+            h_um / 1000.0
         );
     }
 }
@@ -499,9 +530,17 @@ fn main() -> Result<()> {
             let strategy: PolygonStrategy = strategy.into();
             let density_enforce = !no_density_enforce;
             let profiles = pdk.layer_profiles();
+            // For size_um, use the DRC rules that will actually be used for generation
+            let size_um_drc = match color_mode {
+                ColorModeArg::Single => profiles[0].drc.clone(),
+                ColorModeArg::Channel | ColorModeArg::Palette => most_conservative_drc(&profiles),
+            };
             let (max_width, max_height) = if let Some(ref size_str) = size_um {
-                let (pw, ph) = parse_size_um(size_str, &pdk, &profiles[0].drc, touching)?;
-                (Some(max_width.unwrap_or(pw).min(pw)), Some(max_height.unwrap_or(ph).min(ph)))
+                let (pw, ph) = parse_size_um(size_str, &pdk, &size_um_drc, touching)?;
+                (
+                    Some(max_width.unwrap_or(pw).min(pw)),
+                    Some(max_height.unwrap_or(ph).min(ph)),
+                )
             } else {
                 (max_width, max_height)
             };
@@ -677,9 +716,16 @@ fn main() -> Result<()> {
             let strategy: PolygonStrategy = strategy.into();
             let density_enforce = !no_density_enforce;
             let profiles = pdk.layer_profiles();
+            let size_um_drc = match color_mode {
+                ColorModeArg::Single => profiles[0].drc.clone(),
+                ColorModeArg::Channel | ColorModeArg::Palette => most_conservative_drc(&profiles),
+            };
             let (max_width, max_height) = if let Some(ref size_str) = size_um {
-                let (pw, ph) = parse_size_um(size_str, &pdk, &profiles[0].drc, touching)?;
-                (Some(max_width.unwrap_or(pw).min(pw)), Some(max_height.unwrap_or(ph).min(ph)))
+                let (pw, ph) = parse_size_um(size_str, &pdk, &size_um_drc, touching)?;
+                (
+                    Some(max_width.unwrap_or(pw).min(pw)),
+                    Some(max_height.unwrap_or(ph).min(ph)),
+                )
             } else {
                 (max_width, max_height)
             };
@@ -805,15 +851,22 @@ fn main() -> Result<()> {
             merge_into_gds_multi(&gds_layers, &chip, &output, cell.as_deref(), ox, oy)?;
 
             // Report placed bounds (with offset)
-            if let Some(bb) = layer_results.iter().flat_map(|(r, _)| r.iter()).copied().collect::<Vec<_>>().as_slice().first().and_then(|_| {
-                let all: Vec<Rect> = layer_results.iter().flat_map(|(r, _)| r.iter().map(|rect| Rect::new(rect.x0 + ox, rect.y0 + oy, rect.x1 + ox, rect.y1 + oy))).collect();
-                bounding_box(&all)
-            }) {
+            let offset_rects: Vec<Rect> = layer_results
+                .iter()
+                .flat_map(|(r, _)| {
+                    r.iter().map(|rect| {
+                        Rect::new(rect.x0 + ox, rect.y0 + oy, rect.x1 + ox, rect.y1 + oy)
+                    })
+                })
+                .collect();
+            if let Some(bb) = bounding_box(&offset_rects) {
                 let dbu_per_um = pdk.pdk.db_units_per_um as f64;
                 tracing::info!(
                     "Placed artwork bounds: ({:.2}, {:.2}) to ({:.2}, {:.2}) um",
-                    bb.x0 as f64 / dbu_per_um, bb.y0 as f64 / dbu_per_um,
-                    bb.x1 as f64 / dbu_per_um, bb.y1 as f64 / dbu_per_um
+                    bb.x0 as f64 / dbu_per_um,
+                    bb.y0 as f64 / dbu_per_um,
+                    bb.x1 as f64 / dbu_per_um,
+                    bb.y1 as f64 / dbu_per_um
                 );
             }
 
@@ -856,7 +909,7 @@ fn main() -> Result<()> {
             println!();
             println!("Grid: {} µm", config.grid.manufacturing_grid_um);
             println!(
-                "Pixel pitch: {} µm (DRC-safe pixel size)",
+                "Pixel pitch: {:.3} µm (DRC-safe pixel size)",
                 config.pixel_pitch_um()
             );
             println!();

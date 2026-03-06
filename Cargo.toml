@@ -1,11 +1,17 @@
 [package]
 name = "fabbula"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.93"
 description = "Multi-PDK, DRC-aware image-to-GDSII artwork generator"
 license = "Apache-2.0"
+authors = ["Daniel Keller"]
 keywords = ["gdsii", "asic", "chip-art", "pdk", "eda"]
 categories = ["science", "command-line-utilities"]
+repository = "https://github.com/DanielKellerM/fabbula"
+homepage = "https://github.com/DanielKellerM/fabbula"
+readme = "README.md"
+exclude = ["profiling/", "outputs/", "media/", "docs/", "todo/"]
 
 [dependencies]
 # GDSII I/O — gds21 is mature, serde-friendly, and part of Layout21
@@ -35,6 +41,9 @@ rayon = "1"
 # R-tree spatial index for scalable DRC
 rstar = "0.12"
 
+# Gzip decompression for compressed GDS files
+flate2 = "1"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
@@ -43,6 +52,10 @@ strip = "symbols"
 [profile.bench]
 lto = "thin"
 codegen-units = 1
+
+[[bin]]
+name = "lint-commits"
+path = "util/lint-commits.rs"
 
 [[bin]]
 name = "gen_test_image"
@@ -66,6 +79,9 @@ path = "profiling/bench_polygon.rs"
 name = "bench_artwork"
 harness = false
 path = "profiling/bench_artwork.rs"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dev-dependencies]
 tempfile = "3"

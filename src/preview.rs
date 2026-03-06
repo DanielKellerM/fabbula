@@ -1,3 +1,12 @@
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+//! SVG and interactive HTML preview generation.
+//!
+//! Renders artwork polygons as static SVG images or self-contained HTML files
+//! with pan, zoom, and hover-to-inspect functionality.
+
 use crate::pdk::PdkConfig;
 use crate::polygon::Rect;
 use anyhow::{Context, Result};

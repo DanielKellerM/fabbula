@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use fabbula::drc::{check_density_only, check_drc, DrcRule};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use fabbula::drc::{DrcRule, check_density_only, check_drc};
 use fabbula::pdk::PdkConfig;
 use fabbula::polygon::Rect;
 

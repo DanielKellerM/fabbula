@@ -1,9 +1,64 @@
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+//! GDSII file reading, writing, and merging.
+//!
+//! Provides functions to write artwork polygons to new GDS files, merge them
+//! into existing layouts, and read back existing metal for exclusion masking.
+
 use crate::pdk::PdkConfig;
 use crate::polygon::Rect;
 use anyhow::Result;
 use gds21::{GdsBoundary, GdsLibrary, GdsPoint, GdsStrans, GdsStruct};
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::path::Path;
+
+/// Load a GDS library, transparently decompressing .gz files.
+fn load_gds(path: &Path) -> Result<GdsLibrary> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext.eq_ignore_ascii_case("gz") {
+        let file = std::fs::File::open(path)
+            .map_err(|e| anyhow::anyhow!("Failed to open {}: {}", path.display(), e))?;
+        let mut decoder = flate2::read::GzDecoder::new(file);
+        let mut decompressed = Vec::new();
+        decoder
+            .read_to_end(&mut decompressed)
+            .map_err(|e| anyhow::anyhow!("Failed to decompress {}: {}", path.display(), e))?;
+        let tmp_dir = std::env::temp_dir();
+        let tmp_path = tmp_dir.join(format!("fabbula_decompress_{}.gds", std::process::id()));
+        std::fs::write(&tmp_path, &decompressed)?;
+        tracing::info!(
+            "Decompressed {} ({:.1} MB)",
+            path.display(),
+            decompressed.len() as f64 / 1_000_000.0
+        );
+        let lib = GdsLibrary::load(&tmp_path).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read decompressed GDSII {}: {:?}",
+                path.display(),
+                e
+            )
+        });
+        let _ = std::fs::remove_file(&tmp_path);
+        lib
+    } else {
+        GdsLibrary::load(path)
+            .map_err(|e| anyhow::anyhow!("Failed to read GDSII {}: {:?}", path.display(), e))
+    }
+}
+
+fn format_cell_list(structs: &[GdsStruct]) -> String {
+    let names: Vec<&str> = structs.iter().map(|s| s.name.as_str()).collect();
+    if names.len() <= 20 {
+        names.join(", ")
+    } else {
+        let mut s = names[..20].join(", ");
+        s.push_str(&format!(" ... and {} more", names.len() - 20));
+        s
+    }
+}
 
 fn make_boundary(
     rect: &Rect,
@@ -85,14 +140,20 @@ pub fn merge_into_gds_multi(
     offset_x: i32,
     offset_y: i32,
 ) -> Result<()> {
-    let mut lib = GdsLibrary::load(input_gds)
-        .map_err(|e| anyhow::anyhow!("Failed to read GDSII {}: {:?}", input_gds.display(), e))?;
+    let mut lib = load_gds(input_gds)?;
 
     let cell = if let Some(name) = target_cell {
+        let available = format_cell_list(&lib.structs);
         lib.structs
             .iter_mut()
             .find(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("Cell '{}' not found in GDS", name))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cell '{}' not found in GDS. Available cells: {}",
+                    name,
+                    available
+                )
+            })?
     } else {
         lib.structs
             .last_mut()
@@ -389,14 +450,17 @@ pub fn read_existing_metal(
     pdk: &PdkConfig,
     cell_name: Option<&str>,
 ) -> Result<Vec<Rect>> {
-    let lib = GdsLibrary::load(gds_path)
-        .map_err(|e| anyhow::anyhow!("Failed to read GDSII {}: {:?}", gds_path.display(), e))?;
+    let lib = load_gds(gds_path)?;
 
     let cell = if let Some(name) = cell_name {
-        lib.structs
-            .iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("Cell '{}' not found", name))?
+        lib.structs.iter().find(|s| s.name == name).ok_or_else(|| {
+            let available = format_cell_list(&lib.structs);
+            anyhow::anyhow!(
+                "Cell '{}' not found in GDS. Available cells: {}",
+                name,
+                available
+            )
+        })?
     } else {
         lib.structs
             .last()

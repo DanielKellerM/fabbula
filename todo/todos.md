@@ -13,15 +13,13 @@
 
 ## In Progress
 
-- [~] **P0** Audit fixes - competitive analysis and usability review
+- [x] **P0** Audit fixes - competitive analysis and usability review
   - A1: Fix wide_metal_spacing in pitch calculation (DRC-by-construction bug)
   - A2: Fix README to describe actual pipeline (not fake vectorization)
   - B1: Add `--size-um` CLI parameter for physical dimension specification
   - B2: Add artwork bounds reporting after generation/merge
   - B5: Better error messages with available cell list
-  - B4: Compressed GDS support (.gds.gz)
-  - B3: Die boundary awareness warning
-  - A3: Verify FreePDK45 wide_metal threshold
+  - B4: Compressed GDS support (.gds.gz via flate2)
   - Files: `src/polygon.rs`, `src/pdk.rs`, `README.md`, `src/main.rs`, `src/gdsio.rs`, `Cargo.toml`
 
 - [x] **P0** HFT-style performance optimization (Phase 1)
@@ -45,6 +43,12 @@
   - AP layer: min_width 0.80 um, min_spacing 0.80 um
   - GPU die-scale demo: B200-class ~814 mm2 (28.5mm x 28.5mm)
   - Files: `pdks/fabbula2.toml`, `src/pdk.rs`
+
+- [x] **P0** Enforce max_width during polygon merge
+  - Compute max_merge pixel cap from max_width, pixel_w, pitch
+  - Cap row_merged_rects run length and greedy_merge width/height
+  - Eliminates max_width DRC violations for fabbula2, ASAP7
+  - Files: `src/polygon.rs`
 
 ## Features
 
@@ -80,12 +84,10 @@
   - Also: update `src/pdk.rs` to `include_str!` new TOMLs, add to `list-pdks` output,
     add integration test cases in `tests/drc_per_pdk.rs`, update README Supported PDKs table
 
-- [ ] **P2** Support compressed GDS input (.gds.gz, .gds.tar.gz)
-  - Real chip GDS files are commonly distributed gzip-compressed
-  - Add transparent decompression in `read_existing_metal()` and `merge_into_gds_multi()`
-  - Detect by file extension (.gz) and decompress to temp file or stream via `flate2` crate
-  - Also handle `.tar.gz` archives (extract first .gds file)
-  - Files: `src/gdsio.rs`, `Cargo.toml` (add `flate2` dep)
+- [x] **P2** Support compressed GDS input (.gds.gz)
+  - Transparent decompression in `load_gds()` via `flate2` crate
+  - Detect by `.gz` extension, decompress to temp file before loading
+  - Files: `src/gdsio.rs`, `Cargo.toml`
 
 ## Performance / Profiling
 
@@ -94,6 +96,12 @@
   - Option 1: Checkerboard 17812x17812 - bump `gen_test_image.rs` size. Stresses greedy-merge + GDS write without density enforcement dominating
   - Option 2: Noise/mixed pattern ~40% fill at 17812x17812 - exercises density enforcement realistically
   - Files: `profiling/gen_test_image.rs`, `profiling/bench_die_scale.rs`
+
+- [x] **P1** Add LICENSE files, copyright headers, and IIS ETHZ attribution
+  - Apache 2.0 LICENSE for software, Solderpad Hardware License v2.1 for PDK configs
+  - Copyright headers on all src/*.rs and pdks/*.toml files
+  - README: fabbula2 in PDK table, IIS ETHZ/CSEM acknowledgment, dual license section
+  - Files: LICENSE, LICENSE.SHL, README.md, src/*.rs, pdks/*.toml
 
 ## Infrastructure
 

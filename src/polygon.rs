@@ -1,3 +1,14 @@
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Bitmap-to-rectangle conversion strategies.
+//!
+//! Converts an [`ArtworkBitmap`] into a list of
+//! [`Rect`] polygons in database units. Three strategies are available:
+//! [`PolygonStrategy::PixelRects`], [`PolygonStrategy::RowMerge`], and
+//! [`PolygonStrategy::GreedyMerge`].
+
 use crate::artwork::ArtworkBitmap;
 use crate::pdk::{DrcRules, PdkConfig};
 use anyhow::Result;
@@ -13,6 +24,7 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// Creates a new rectangle, normalizing coordinates so `x0 <= x1` and `y0 <= y1`.
     pub fn new(x0: i32, y0: i32, x1: i32, y1: i32) -> Self {
         Self {
             x0: x0.min(x1),
@@ -22,16 +34,19 @@ impl Rect {
         }
     }
 
+    /// Returns the width of the rectangle (`x1 - x0`) in database units.
     #[inline]
     pub fn width(&self) -> i32 {
         self.x1 - self.x0
     }
 
+    /// Returns the height of the rectangle (`y1 - y0`) in database units.
     #[inline]
     pub fn height(&self) -> i32 {
         self.y1 - self.y0
     }
 
+    /// Returns the area of the rectangle in database units squared.
     #[inline]
     pub fn area(&self) -> i64 {
         self.width() as i64 * self.height() as i64
@@ -102,20 +117,33 @@ pub fn generate_polygons(
     let pixel_w_dbu = pdk.um_to_dbu(min_w_um);
     let pitch_dbu = pdk.um_to_dbu(pitch_um);
 
+    // Max pixels a merged rect can span before exceeding max_width.
+    // Physical width of n merged pixels = (n-1)*pitch + pixel_w.
+    let max_merge: u16 = if let Some(max_w) = drc.max_width {
+        let max_w_dbu = pdk.um_to_dbu(max_w);
+        let n = ((max_w_dbu - pixel_w_dbu) / pitch_dbu + 1).max(1);
+        (n as u32).min(u16::MAX as u32) as u16
+    } else {
+        u16::MAX
+    };
+
     tracing::info!(
-        "Generating polygons: pixel={}um, spacing={}um, pitch={}um ({} dbu), strategy={:?}, touching={}",
+        "Generating polygons: pixel={}um, spacing={}um, pitch={}um ({} dbu), strategy={:?}, touching={}, max_merge={}",
         min_w_um,
         eff_s_um,
         pitch_um,
         pitch_dbu,
         strategy,
-        touching
+        touching,
+        max_merge
     );
 
     let raw_rects = match strategy {
         PolygonStrategy::PixelRects => pixel_rects(bitmap, pixel_w_dbu, pitch_dbu),
-        PolygonStrategy::RowMerge => row_merged_rects(bitmap, pixel_w_dbu, pitch_dbu),
-        PolygonStrategy::GreedyMerge => greedy_merged_rects(bitmap, pixel_w_dbu, pitch_dbu),
+        PolygonStrategy::RowMerge => row_merged_rects(bitmap, pixel_w_dbu, pitch_dbu, max_merge),
+        PolygonStrategy::GreedyMerge => {
+            greedy_merged_rects(bitmap, pixel_w_dbu, pitch_dbu, max_merge)
+        }
     };
 
     // Filter out polygons that violate min_area
@@ -175,7 +203,7 @@ fn pixel_rects_serial(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<R
 }
 
 /// Merge horizontally adjacent pixels into runs
-fn row_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
+fn row_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32, max_merge: u16) -> Vec<Rect> {
     let mut rects = Vec::with_capacity(bitmap.metal_count());
     for y in 0..bitmap.height {
         let y0 = (bitmap.height - 1 - y) as i32 * pitch;
@@ -184,6 +212,13 @@ fn row_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rec
             let on = x < bitmap.width && bitmap.get(x, y);
             match (on, run_start) {
                 (true, None) => run_start = Some(x),
+                (true, Some(start)) if (x - start) as u16 >= max_merge => {
+                    // Emit current run that reached max_merge, start new run at x
+                    let x0 = start as i32 * pitch;
+                    let x1 = (x - 1) as i32 * pitch + pixel_w;
+                    rects.push(Rect::new(x0, y0, x1, y0 + pixel_w));
+                    run_start = Some(x);
+                }
                 (false, Some(start)) => {
                     let x0 = start as i32 * pitch;
                     let x1 = (x - 1) as i32 * pitch + pixel_w;
@@ -289,7 +324,12 @@ fn effective_run_word_scan(used: &[u64], start: usize, raw: usize) -> u16 {
 }
 
 /// Greedy maximal rectangle merging (row-then-column)
-fn greedy_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
+fn greedy_merged_rects(
+    bitmap: &ArtworkBitmap,
+    pixel_w: i32,
+    pitch: i32,
+    max_merge: u16,
+) -> Vec<Rect> {
     let w = bitmap.width as usize;
     let h = bitmap.height as usize;
     let total = w * h;
@@ -335,9 +375,9 @@ fn greedy_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<
 
     // For large bitmaps, use strip-based parallel greedy merge
     if total >= PARALLEL_PIXEL_THRESHOLD && h > STRIP_HEIGHT {
-        greedy_merge_parallel_strips(words, &runs, w, h, pixel_w, pitch)
+        greedy_merge_parallel_strips(words, &runs, w, h, pixel_w, pitch, max_merge)
     } else {
-        greedy_merge_strip(words, &runs, w, 0, h, h, pixel_w, pitch)
+        greedy_merge_strip(words, &runs, w, 0, h, h, pixel_w, pitch, max_merge)
     }
 }
 
@@ -350,6 +390,7 @@ fn greedy_merge_parallel_strips(
     h: usize,
     pixel_w: i32,
     pitch: i32,
+    max_merge: u16,
 ) -> Vec<Rect> {
     use std::cell::RefCell;
 
@@ -374,6 +415,7 @@ fn greedy_merge_parallel_strips(
                     h,
                     pixel_w,
                     pitch,
+                    max_merge,
                     &mut buf.borrow_mut(),
                 )
             })
@@ -394,11 +436,12 @@ fn greedy_merge_strip(
     total_h: usize,
     pixel_w: i32,
     pitch: i32,
+    max_merge: u16,
 ) -> Vec<Rect> {
     let strip_pixels = strip_h * w;
     let mut used = vec![0u64; strip_pixels.div_ceil(64)];
     greedy_merge_strip_inner(
-        words, runs, w, y_start, strip_h, total_h, pixel_w, pitch, &mut used,
+        words, runs, w, y_start, strip_h, total_h, pixel_w, pitch, max_merge, &mut used,
     )
 }
 
@@ -413,13 +456,14 @@ fn greedy_merge_strip_reuse(
     total_h: usize,
     pixel_w: i32,
     pitch: i32,
+    max_merge: u16,
     used: &mut Vec<u64>,
 ) -> Vec<Rect> {
     let needed = (strip_h * w).div_ceil(64);
     used.resize(needed, 0);
     used.fill(0);
     greedy_merge_strip_inner(
-        words, runs, w, y_start, strip_h, total_h, pixel_w, pitch, used,
+        words, runs, w, y_start, strip_h, total_h, pixel_w, pitch, max_merge, used,
     )
 }
 
@@ -434,9 +478,11 @@ fn greedy_merge_strip_inner(
     total_h: usize,
     pixel_w: i32,
     pitch: i32,
+    max_merge: u16,
     used: &mut [u64],
 ) -> Vec<Rect> {
     let mut rects = Vec::new();
+    let max_h = max_merge as usize;
 
     for sy in 0..strip_h {
         let gy = y_start + sy;
@@ -452,12 +498,12 @@ fn greedy_merge_strip_inner(
 
             // Find widest rectangle extending down within this strip
             let run_raw = runs[gy * w + x] as usize;
-            let mut min_run = effective_run_word_scan(used, sy * w + x, run_raw);
+            let mut min_run = effective_run_word_scan(used, sy * w + x, run_raw).min(max_merge);
             let mut best_area = 0u64;
             let mut best_w = 0u16;
             let mut best_h = 0u32;
 
-            for dy in 0..(strip_h - sy) {
+            for dy in 0..(strip_h - sy).min(max_h) {
                 let cy_strip = sy + dy;
                 let cy_global = gy + dy;
                 let strip_idx = cy_strip * w + x;
@@ -470,7 +516,8 @@ fn greedy_merge_strip_inner(
                 }
 
                 let row_run = runs[global_idx] as usize;
-                min_run = min_run.min(effective_run_word_scan(used, strip_idx, row_run));
+                min_run =
+                    min_run.min(effective_run_word_scan(used, strip_idx, row_run).min(max_merge));
                 let area = min_run as u64 * (dy as u64 + 1);
                 if area > best_area {
                     best_area = area;
@@ -528,15 +575,15 @@ mod tests {
     #[test]
     fn test_row_merge() {
         let bmp = test_bitmap();
-        let rects = row_merged_rects(&bmp, 100, 200);
+        let rects = row_merged_rects(&bmp, 100, 200, u16::MAX);
         // Row 0: [0..2] = 1 rect, Row 1: [1..3] = 1 rect
         assert_eq!(rects.len(), 2);
     }
 
     #[test]
     fn test_greedy_merge() {
-        let bmp = ArtworkBitmap::from_bools(3, 3, &vec![true; 9]);
-        let rects = greedy_merged_rects(&bmp, 100, 100);
+        let bmp = ArtworkBitmap::from_bools(3, 3, &[true; 9]);
+        let rects = greedy_merged_rects(&bmp, 100, 100, u16::MAX);
         // Should produce a single rectangle
         assert_eq!(rects.len(), 1);
     }
@@ -587,6 +634,33 @@ mod tests {
     }
 
     #[test]
+    fn test_row_merge_max_merge() {
+        // 5 pixels in a row, max_merge=2 should split into runs of 2+2+1
+        let bmp = ArtworkBitmap::from_bools(5, 1, &[true, true, true, true, true]);
+        let rects = row_merged_rects(&bmp, 100, 200, 2);
+        assert_eq!(rects.len(), 3);
+        // Each rect should span at most 2 pixels: width = (2-1)*200+100 = 300
+        for r in &rects {
+            assert!(r.width() <= 300, "rect too wide: {}", r.width());
+        }
+    }
+
+    #[test]
+    fn test_greedy_merge_max_merge() {
+        // 4x4 solid grid, max_merge=2 should produce no rect wider or taller than 2 pixels
+        let bmp = ArtworkBitmap::from_bools(4, 4, &[true; 16]);
+        let rects = greedy_merged_rects(&bmp, 100, 100, 2);
+        // Max physical size for 2 merged pixels: (2-1)*100+100 = 200
+        for r in &rects {
+            assert!(r.width() <= 200, "rect too wide: {}", r.width());
+            assert!(r.height() <= 200, "rect too tall: {}", r.height());
+        }
+        // Total coverage should still be 16 pixels
+        let total_pixels: i64 = rects.iter().map(|r| r.area() / (100 * 100)).sum();
+        assert_eq!(total_pixels, 16);
+    }
+
+    #[test]
     fn test_greedy_merge_l_shape() {
         // L-shape pattern to verify correctness with word-level ops
         let bmp = ArtworkBitmap::from_bools(
@@ -597,7 +671,7 @@ mod tests {
                 false, false, false, false,
             ],
         );
-        let rects = greedy_merged_rects(&bmp, 100, 100);
+        let rects = greedy_merged_rects(&bmp, 100, 100, u16::MAX);
         // Verify total pixel coverage
         let total_pixels: i64 = rects.iter().map(|r| r.area() / (100 * 100)).sum();
         assert_eq!(total_pixels, 6); // 6 "on" pixels
@@ -612,11 +686,11 @@ mod tests {
             .map(|i| {
                 let x = i % size;
                 let y = i / size;
-                (x + y) % 5 != 0
+                !(x + y).is_multiple_of(5)
             })
             .collect();
         let bmp = ArtworkBitmap::from_bools(size, size, &bools);
-        let rects = greedy_merged_rects(&bmp, 10, 10);
+        let rects = greedy_merged_rects(&bmp, 10, 10, u16::MAX);
         // Verify total pixel coverage matches
         let expected_on = bools.iter().filter(|&&b| b).count();
         let total_pixels: i64 = rects.iter().map(|r| r.area() / (10 * 10)).sum();

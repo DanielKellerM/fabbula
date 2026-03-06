@@ -1,3 +1,13 @@
+// Copyright 2026 Daniel Keller <daniel.keller.m@gmail.com>
+// Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Multi-layer color extraction (channel splitting, palette quantization).
+//!
+//! Converts color images into per-layer bitmaps using either RGB channel
+//! extraction ([`extract_channels`]) or k-means palette quantization
+//! ([`extract_palette`]).
+
 use crate::artwork::{ArtworkBitmap, ThresholdMode};
 use crate::pdk::ArtworkLayerProfile;
 use anyhow::{Context, Result};
@@ -351,7 +361,7 @@ mod tests {
         let centroids = kmeans(&pixels, 2, 15);
         assert_eq!(centroids.len(), 2);
         // One centroid should be near 10, the other near 240
-        let mut lums: Vec<f32> = centroids.iter().map(|c| luminance(c)).collect();
+        let mut lums: Vec<f32> = centroids.iter().map(luminance).collect();
         lums.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert!(lums[0] < 50.0, "Dark centroid lum={}", lums[0]);
         assert!(lums[1] > 200.0, "Bright centroid lum={}", lums[1]);

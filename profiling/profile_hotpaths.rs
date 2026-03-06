@@ -4,7 +4,7 @@
 use fabbula::artwork::ArtworkBitmap;
 use fabbula::drc::{check_density_only, check_drc};
 use fabbula::pdk::PdkConfig;
-use fabbula::polygon::{generate_polygons, PolygonStrategy};
+use fabbula::polygon::{PolygonStrategy, generate_polygons};
 
 fn dense_pattern(size: u32) -> ArtworkBitmap {
     let bools: Vec<bool> = (0..size * size)

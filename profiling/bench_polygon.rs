@@ -1,7 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use fabbula::artwork::ArtworkBitmap;
 use fabbula::pdk::PdkConfig;
-use fabbula::polygon::{generate_polygons, PolygonStrategy};
+use fabbula::polygon::{PolygonStrategy, generate_polygons};
 
 /// ~80% density pattern - matches typical PDK density targets.
 /// Pixel is off when (x + y) % 5 == 0, giving 80% metal fill.
@@ -10,7 +10,7 @@ fn dense_pattern(size: u32) -> ArtworkBitmap {
         .map(|i| {
             let x = i % size;
             let y = i / size;
-            (x + y) % 5 != 0
+            !(x + y).is_multiple_of(5)
         })
         .collect();
     ArtworkBitmap::from_bools(size, size, &bools)

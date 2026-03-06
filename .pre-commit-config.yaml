@@ -1,0 +1,54 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        files: \.rs$
+        stages: [pre-commit]
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        files: \.rs$
+        stages: [pre-commit]
+
+      - id: taplo-check
+        name: taplo fmt --check
+        entry: taplo fmt --check
+        language: system
+        pass_filenames: false
+        files: \.toml$
+        stages: [pre-commit]
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.44.0
+    hooks:
+      - id: typos
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      - id: cargo-test
+        name: cargo test (pre-push)
+        entry: cargo test --workspace
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

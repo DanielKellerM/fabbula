@@ -1,0 +1,5 @@
+[default.extend-identifiers]
+iy = "iy"
+
+[default.extend-words]
+flate = "flate"

@@ -628,6 +628,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "criterion",
+ "flate2",
  "gds21",
  "image",
  "predicates",

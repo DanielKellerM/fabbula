@@ -7,7 +7,7 @@
 //!
 //! Adding a new PDK? It will automatically be covered by these tests.
 
-use fabbula::drc::{check_drc, DrcRule, DrcViolation};
+use fabbula::drc::{DrcRule, DrcViolation, check_drc};
 use fabbula::pdk::{DrcRules, PdkConfig};
 use fabbula::polygon::Rect;
 
@@ -49,12 +49,18 @@ fn clean_rects_all_pdks() {
     for (pdk, drc, label) in all_pdk_rule_sets() {
         let u = pdk.pdk.db_units_per_um;
         let min_w = dbu(&pdk, drc.min_width);
-        let min_s = dbu(&pdk, drc.min_spacing);
-        // Use 2x min_width to ensure min_area is satisfied
-        let size = min_w * 2;
+        let eff_s = dbu(&pdk, drc.effective_spacing());
+        // Size must satisfy both min_width and min_area
+        let min_area_dbu2 = (drc.min_area * (u as f64 * u as f64)) as i32;
+        let min_side_for_area = if min_area_dbu2 > 0 {
+            ((min_area_dbu2 as f64).sqrt().ceil() as i32).max(min_w)
+        } else {
+            min_w
+        };
+        let size = min_side_for_area.max(min_w * 2);
         let rects = vec![
             Rect::new(0, 0, size, size),
-            Rect::new(size + min_s, 0, 2 * size + min_s, size),
+            Rect::new(size + eff_s, 0, 2 * size + eff_s, size),
         ];
         let v = check_drc(&rects, u, &drc);
         let bad = structural_violations(&v);
@@ -169,11 +175,18 @@ fn wide_metal_spacing_violation_where_defined() {
 fn wide_metal_spacing_clean_for_small_rects() {
     for (pdk, drc, label) in all_pdk_rule_sets() {
         let u = pdk.pdk.db_units_per_um;
-        if drc.wide_metal_threshold.is_some() && drc.wide_metal_spacing.is_some() {
+        if let Some(thresh) = drc.wide_metal_threshold
+            && drc.wide_metal_spacing.is_some()
+        {
             let min_w_dbu = dbu(&pdk, drc.min_width);
             let min_s_dbu = dbu(&pdk, drc.min_spacing);
-            // Small rects (well below threshold) at exactly min_spacing
-            let size = min_w_dbu * 2;
+            let thresh_dbu = dbu(&pdk, thresh);
+            // Rects must be below the threshold in both dimensions
+            let size = min_w_dbu.min(thresh_dbu - 1);
+            if size < min_w_dbu {
+                // Can't make rects that are both >= min_width and < threshold, skip
+                continue;
+            }
             let rects = vec![
                 Rect::new(0, 0, size, size),
                 Rect::new(size + min_s_dbu, 0, 2 * size + min_s_dbu, size),

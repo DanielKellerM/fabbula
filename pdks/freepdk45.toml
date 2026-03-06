@@ -10,7 +10,7 @@
 name = "freepdk45"
 description = "FreePDK45 - NCSU 45nm virtual PDK"
 node_nm = 45
-db_units_per_um = 1000        # 1nm database unit
+db_units_per_um = 1000                            # 1nm database unit
 
 # Top metal layer for artwork (Metal10 - thickest routing layer)
 [artwork_layer]
@@ -29,15 +29,15 @@ purpose = "drawing"
 # DRC rules for the artwork layer (Metal10 - METALG rules)
 # All dimensions in micrometers
 [drc]
-min_width = 0.800             # METALG minimum width
-min_spacing = 0.800           # METALG minimum spacing
-min_area = 0.0                # no minimum area specified
+min_width = 0.800            # METALG minimum width
+min_spacing = 0.800          # METALG minimum spacing
+min_area = 0.0               # no minimum area specified
 min_enclosed_area = 0.0
 density_min = 0.0
-density_max = 0.80            # typical density limit
+density_max = 0.80           # typical density limit
 density_window_um = 500.0
-wide_metal_threshold = 0.900  # spacing increases for wide metal
-wide_metal_spacing = 0.900    # wide metal spacing rule
+wide_metal_threshold = 0.900 # spacing increases for wide metal
+wide_metal_spacing = 0.900   # wide metal spacing rule
 
 # DRC rules for the alt layer (Metal8)
 [drc_alt]
