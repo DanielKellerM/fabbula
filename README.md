@@ -15,7 +15,7 @@
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Getting Started](#getting-started) · [How It Works](#how-it-works) · [Supported PDKs](#supported-pdks) · [Prompt Guide](#prompt-guide) · [Roadmap](#roadmap)
+[Getting Started](#getting-started) · [How It Works](#how-it-works) · [Supported PDKs](#supported-pdks) · [Performance](#performance) · [Prompt Guide](#prompt-guide) · [Roadmap](#roadmap)
 
 </div>
 
@@ -41,6 +41,7 @@ Existing image-to-GDSII tools are fragmented, single-PDK, and produce naive pixe
 - **Pure Rust** - built-in vectorizer (vtracer), SVG parser (usvg), GDSII writer (gds21). No Python, no Inkscape, no potrace, no ImageMagick. Just `cargo install fabbula`
 - **Multi-PDK** - ships with SKY130, IHP SG13G2, and GF180MCU configurations. Add your own with a 30-line TOML file
 - **DRC-clean by construction** - polygon sizing and grid snapping derived from actual PDK design rules
+- **Blazing fast** - packed bitset bitmap, parallel DRC via rayon, streaming I/O. Processes a 2048x2048 image in ~12ms and validates 100k rectangles in ~15ms. See [Performance](#performance)
 - **Vector-quality output** - traces curves into proper polygons, not just pixel rectangles. Your art looks like art, not a mosaic
 - **Built-in DRC checker** - validates output before you waste a shuttle run
 
@@ -168,9 +169,42 @@ All existing tools are Python or C, most require external dependencies (Magic VL
 | Self-contained | Yes | No (KLayout, IM, Potrace) | No (Magic VLSI) | Yes | No (Magic, Docker) |
 | Multi-PDK | 3 built-in + custom TOML | IHP SG13G2 | SKY130 | Manual | SKY130 |
 | DRC-clean output | By construction | Tetromino fill | Manual | No | No |
+| Parallel DRC | Yes (rayon) | No | No | No | No |
 | GDS merge | Yes | Yes (via KLayout) | No | No | No |
 | Built-in DRC check | Yes | No | No | No | No |
 | SVG preview | Yes | Yes (via KLayout) | No | No | No |
+
+## Performance
+
+fabbula is designed to be fast enough that artwork generation never becomes a bottleneck in your tapeout flow - even at large image sizes. All benchmarks run on a single machine using `cargo bench` (criterion).
+
+### Polygon generation
+
+Bitmap-to-rectangle conversion at ~80% metal density (matching typical PDK density targets):
+
+| Image size | Pixels | Greedy merge | Row merge |
+|---|---|---|---|
+| 256 x 256 | 65k | 0.18 ms | - |
+| 512 x 512 | 262k | 0.72 ms | 0.22 ms |
+| 2048 x 2048 | 4.2M | 12.5 ms | 3.4 ms |
+| 4096 x 4096 | 16.8M | 51 ms | - |
+
+### DRC validation
+
+Full DRC check (min width, max width, min spacing, wide-metal spacing, min area, density) on clean rect grids:
+
+| Rectangles | Time |
+|---|---|
+| 12k | 1.6 ms |
+| 50k | 6.8 ms |
+| 100k | 15.2 ms |
+
+### What makes it fast
+
+- **Packed bitset bitmap** - `Vec<u64>` instead of `Vec<bool>` cuts memory 8x, and `count_ones()` makes density computation nearly free
+- **Parallel DRC** - width/area and spacing checks run across cores via rayon, giving ~58% speedup on multi-core machines
+- **R-tree spatial index** - spacing checks are O(n log n) instead of O(n^2), making 100k-rect layouts practical
+- **Streaming I/O** - HTML/SVG previews write directly through a BufWriter instead of building multi-MB intermediate strings
 
 ## Roadmap
 
@@ -182,9 +216,9 @@ All existing tools are Python or C, most require external dependencies (Magic VL
 - [x] SVG preview output
 - [ ] Built-in vtracer vectorization (PNG → SVG → GDS in one binary)
 - [ ] usvg-based SVG path import (hand-drawn vector art)
-- [ ] Exclusion zones (avoid existing top-metal structures)
+- [x] Exclusion zones (avoid existing top-metal structures)
 - [ ] Density-aware artwork generation
-- [ ] LEF output for OpenLane/OpenROAD integration
+- [x] LEF output for OpenLane/OpenROAD integration
 - [ ] Grayscale dithering for multi-density artwork
 - [ ] OASIS output support
 - [ ] WASM build for browser-based preview

@@ -1,7 +1,7 @@
 use crate::pdk::PdkConfig;
 use crate::polygon::{bounding_box, Rect};
 use anyhow::{Context, Result};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 /// Write an SVG preview of the generated polygons
@@ -23,8 +23,9 @@ pub fn write_svg(
     let svg_w = (vb_w as f64 * scale) as u32;
     let svg_h = (vb_h as f64 * scale) as u32;
 
-    let mut f = std::fs::File::create(output)
+    let file = std::fs::File::create(output)
         .with_context(|| format!("Failed to create SVG: {}", output.display()))?;
+    let mut f = BufWriter::new(file);
 
     writeln!(
         f,
@@ -75,6 +76,7 @@ pub fn write_svg(
 }
 
 /// Write a self-contained interactive HTML preview with pan, zoom, and hover tooltips.
+/// Streams rects directly to file instead of building an intermediate String.
 pub fn write_html_preview(rects: &[Rect], output: &Path, pdk: &PdkConfig) -> Result<()> {
     let bb = bounding_box(rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
     let dbu = pdk.pdk.db_units_per_um as f64;
@@ -86,31 +88,14 @@ pub fn write_html_preview(rects: &[Rect], output: &Path, pdk: &PdkConfig) -> Res
     let vb_y = bb.y0 - margin;
     let vb_w = bb.width() + 2 * margin;
     let vb_h = bb.height() + 2 * margin;
+    let flip_y = vb_y * 2 + vb_h;
+    let sw = (vb_w.max(vb_h) as f64 * 0.002) as i32;
 
-    let mut f = std::fs::File::create(output)
+    let file = std::fs::File::create(output)
         .with_context(|| format!("Failed to create HTML preview: {}", output.display()))?;
+    let mut f = BufWriter::new(file);
 
-    // Build SVG rect elements
-    let mut svg_rects = String::new();
-    for rect in rects {
-        use std::fmt::Write as FmtWrite;
-        write!(
-            svg_rects,
-            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#b0c4de\" class=\"r\" \
-             data-x0=\"{}\" data-y0=\"{}\" data-x1=\"{}\" data-y1=\"{}\"/>",
-            rect.x0,
-            rect.y0,
-            rect.width(),
-            rect.height(),
-            rect.x0,
-            rect.y0,
-            rect.x1,
-            rect.y1
-        )
-        .unwrap();
-        svg_rects.push('\n');
-    }
-
+    // Part 1: Header
     write!(
         f,
         r##"<!DOCTYPE html>
@@ -140,7 +125,40 @@ pub fn write_html_preview(rects: &[Rect], output: &Path, pdk: &PdkConfig) -> Res
      viewBox="{vb_x} {vb_y} {vb_w} {vb_h}">
   <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="#0d1117"/>
   <g id="art" transform="translate(0, {flip_y}) scale(1, -1)">
-{svg_rects}  </g>
+"##,
+        pdk_name = pdk.pdk.name,
+        poly_count = rects.len(),
+        width_um = width_um,
+        height_um = height_um,
+        vb_x = vb_x,
+        vb_y = vb_y,
+        vb_w = vb_w,
+        vb_h = vb_h,
+        flip_y = flip_y,
+        sw = sw,
+    )?;
+
+    // Part 2: Stream rects directly
+    for rect in rects {
+        writeln!(
+            f,
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#b0c4de\" class=\"r\" \
+             data-x0=\"{}\" data-y0=\"{}\" data-x1=\"{}\" data-y1=\"{}\"/>",
+            rect.x0,
+            rect.y0,
+            rect.width(),
+            rect.height(),
+            rect.x0,
+            rect.y0,
+            rect.x1,
+            rect.y1
+        )?;
+    }
+
+    // Part 3: Footer
+    write!(
+        f,
+        r##"  </g>
 </svg>
 <script>
 (function(){{
@@ -198,18 +216,11 @@ pub fn write_html_preview(rects: &[Rect], output: &Path, pdk: &PdkConfig) -> Res
 }})();
 </script></body></html>
 "##,
-        pdk_name = pdk.pdk.name,
-        poly_count = rects.len(),
-        width_um = width_um,
-        height_um = height_um,
+        dbu = dbu,
         vb_x = vb_x,
         vb_y = vb_y,
         vb_w = vb_w,
         vb_h = vb_h,
-        flip_y = vb_y * 2 + vb_h,
-        svg_rects = svg_rects,
-        dbu = dbu,
-        sw = (vb_w.max(vb_h) as f64 * 0.002) as i32,
     )?;
 
     tracing::info!(

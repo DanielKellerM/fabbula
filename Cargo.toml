@@ -35,7 +35,31 @@ rayon = "1"
 # R-tree spatial index for scalable DRC
 rstar = "0.12"
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
+
+[[bin]]
+name = "gen_test_image"
+path = "profiling/gen_test_image.rs"
+
+[[bench]]
+name = "bench_drc"
+harness = false
+path = "profiling/bench_drc.rs"
+
+[[bench]]
+name = "bench_polygon"
+harness = false
+path = "profiling/bench_polygon.rs"
+
 [dev-dependencies]
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
+criterion = { version = "0.5", features = ["html_reports"] }

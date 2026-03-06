@@ -2,12 +2,15 @@ use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
-use fabbula::artwork::{apply_exclusion_mask, load_artwork, ArtworkBitmap, ThresholdMode};
-use fabbula::drc::{check_drc, report_drc};
+use fabbula::artwork::{
+    apply_exclusion_mask, enforce_density, enforce_density_region, load_artwork, ArtworkBitmap,
+    ThresholdMode,
+};
+use fabbula::drc::{check_density_only, check_drc, report_drc, DrcRule};
 use fabbula::gdsio::{merge_into_gds, read_existing_metal, write_gds};
 use fabbula::lef::write_lef;
 use fabbula::pdk::PdkConfig;
-use fabbula::polygon::{generate_polygons, PolygonStrategy};
+use fabbula::polygon::{generate_polygons, PolygonStrategy, Rect};
 use fabbula::preview::{write_html_preview, write_svg};
 
 #[derive(Parser)]
@@ -103,6 +106,10 @@ enum Commands {
         /// Run DRC check on output
         #[arg(long)]
         check_drc: bool,
+
+        /// Disable automatic density enforcement (allow density violations)
+        #[arg(long)]
+        no_density_enforce: bool,
     },
 
     /// Merge artwork into an existing GDSII chip file
@@ -162,6 +169,10 @@ enum Commands {
         /// Exclusion margin in um - clear artwork pixels near existing metal
         #[arg(long)]
         exclusion_margin: Option<f64>,
+
+        /// Disable automatic density enforcement
+        #[arg(long)]
+        no_density_enforce: bool,
     },
 
     /// List available built-in PDK configurations
@@ -232,6 +243,116 @@ fn prepare_bitmap(
     Ok(bitmap)
 }
 
+/// Generate polygons with a closed-loop density enforcement.
+///
+/// After the initial bitmap-level density pre-pass, generates polygons and checks
+/// for density violations. If any are found, maps the violating window back to
+/// bitmap pixel coordinates and applies targeted density enforcement, then retries.
+/// This closes the gap between bitmap-level density (pixel space) and DRC density
+/// (physical merged rectangles).
+fn generate_with_density_loop(
+    bitmap: &mut ArtworkBitmap,
+    pdk: &PdkConfig,
+    strategy: PolygonStrategy,
+    touching: bool,
+    max_retries: u32,
+) -> Result<Vec<Rect>> {
+    let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
+    let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
+    let pitch_um = if touching {
+        min_w_um
+    } else {
+        min_w_um + min_s_um
+    };
+    let pitch_dbu = pdk.um_to_dbu(pitch_um);
+    let drc_rules = pdk.active_drc(false);
+
+    let mut best_rects = generate_polygons(bitmap, pdk, strategy, touching)?;
+
+    if pdk.drc.density_max >= 1.0 {
+        return Ok(best_rects);
+    }
+
+    for attempt in 0..max_retries {
+        let violations =
+            check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, Some(1));
+        if violations.is_empty() {
+            return Ok(best_rects);
+        }
+
+        // Map all density violations back to bitmap pixel space and fix them
+        let density_violations =
+            check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, None);
+        let mut total_cleared = 0usize;
+
+        for v in &density_violations {
+            if v.rule != DrcRule::DensityMax {
+                continue;
+            }
+            let (wx_dbu, wy_dbu) = v.location;
+
+            let window_dbu = pdk.um_to_dbu(drc_rules.density_window_um);
+
+            // Convert physical DBU window to bitmap pixel coordinates
+            // Pixel (px, py) maps to physical:
+            //   x_dbu = px * pitch_dbu
+            //   y_dbu = (bitmap.height - 1 - py) * pitch_dbu
+            // So: px = x_dbu / pitch_dbu
+            //     py = bitmap.height - 1 - (y_dbu / pitch_dbu)
+            let px_start = (wx_dbu / pitch_dbu).max(0) as u32;
+            let px_end_dbu = wx_dbu + window_dbu;
+            let px_end = ((px_end_dbu + pitch_dbu - 1) / pitch_dbu).max(0) as u32;
+
+            // y is flipped: higher physical y = lower bitmap y
+            let py_end_phys = wy_dbu; // lower physical y edge
+            let py_start_phys = wy_dbu + window_dbu; // upper physical y edge
+            let bh = bitmap.height as i32;
+            let py_start = (bh - 1 - (py_start_phys / pitch_dbu)).max(0) as u32;
+            let py_end = (bh - (py_end_phys / pitch_dbu)).max(0) as u32;
+
+            let rw = px_end.saturating_sub(px_start).min(bitmap.width - px_start);
+            let rh = py_end
+                .saturating_sub(py_start)
+                .min(bitmap.height - py_start);
+
+            if rw > 0 && rh > 0 {
+                // Use a tighter threshold (95% of max) to overshoot the fix
+                let tight_max = drc_rules.density_max * 0.95;
+                total_cleared +=
+                    enforce_density_region(bitmap, tight_max, px_start, py_start, rw, rh);
+            }
+        }
+
+        if total_cleared == 0 {
+            tracing::warn!(
+                "Density loop attempt {}: no pixels could be cleared, stopping",
+                attempt + 1
+            );
+            break;
+        }
+
+        tracing::info!(
+            "Density loop attempt {}: cleared {} pixels, regenerating polygons",
+            attempt + 1,
+            total_cleared
+        );
+
+        best_rects = generate_polygons(bitmap, pdk, strategy, touching)?;
+    }
+
+    // Final density check for logging
+    let final_violations =
+        check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, Some(1));
+    if !final_violations.is_empty() {
+        tracing::warn!(
+            "Density loop exhausted {} retries with violations remaining",
+            max_retries
+        );
+    }
+
+    Ok(best_rects)
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -258,9 +379,10 @@ fn main() -> Result<()> {
             html,
             lef,
             check_drc: do_drc,
+            no_density_enforce,
         } => {
             let pdk = load_pdk(&pdk)?;
-            let bitmap = prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
+            let mut bitmap = prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
 
             tracing::info!(
                 "Bitmap: {}x{}, density: {:.1}%",
@@ -269,7 +391,29 @@ fn main() -> Result<()> {
                 bitmap.density() * 100.0
             );
 
-            let rects = generate_polygons(&bitmap, &pdk, strategy.into(), touching)?;
+            let density_enforce = !no_density_enforce && pdk.drc.density_max < 1.0;
+            if density_enforce {
+                let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
+                let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
+                let pitch_um = if touching {
+                    min_w_um
+                } else {
+                    min_w_um + min_s_um
+                };
+                let window_px = (pdk.drc.density_window_um / pitch_um).floor() as u32;
+                if window_px > 0 {
+                    let cleared = enforce_density(&mut bitmap, pdk.drc.density_max, window_px);
+                    if cleared > 0 {
+                        tracing::info!("Density enforcement: cleared {} pixels", cleared);
+                    }
+                }
+            }
+
+            let rects = if density_enforce {
+                generate_with_density_loop(&mut bitmap, &pdk, strategy.into(), touching, 3)?
+            } else {
+                generate_polygons(&bitmap, &pdk, strategy.into(), touching)?
+            };
 
             if do_drc {
                 let drc_rules = pdk.active_drc(false);
@@ -309,6 +453,7 @@ fn main() -> Result<()> {
             max_height,
             invert,
             exclusion_margin,
+            no_density_enforce,
         } => {
             let pdk = load_pdk(&pdk)?;
             let mut bitmap = prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
@@ -322,7 +467,29 @@ fn main() -> Result<()> {
                 }
             }
 
-            let rects = generate_polygons(&bitmap, &pdk, strategy.into(), touching)?;
+            let density_enforce = !no_density_enforce && pdk.drc.density_max < 1.0;
+            if density_enforce {
+                let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
+                let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
+                let pitch_um = if touching {
+                    min_w_um
+                } else {
+                    min_w_um + min_s_um
+                };
+                let window_px = (pdk.drc.density_window_um / pitch_um).floor() as u32;
+                if window_px > 0 {
+                    let cleared = enforce_density(&mut bitmap, pdk.drc.density_max, window_px);
+                    if cleared > 0 {
+                        tracing::info!("Density enforcement: cleared {} pixels", cleared);
+                    }
+                }
+            }
+
+            let rects = if density_enforce {
+                generate_with_density_loop(&mut bitmap, &pdk, strategy.into(), touching, 3)?
+            } else {
+                generate_polygons(&bitmap, &pdk, strategy.into(), touching)?
+            };
 
             let ox = pdk.um_to_dbu(offset_x);
             let oy = pdk.um_to_dbu(offset_y);

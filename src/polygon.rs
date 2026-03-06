@@ -1,6 +1,7 @@
 use crate::artwork::ArtworkBitmap;
 use crate::pdk::PdkConfig;
 use anyhow::Result;
+use rayon::prelude::*;
 
 /// A rectangle in database units (nm typically)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -127,14 +128,37 @@ pub fn generate_polygons(
     Ok(filtered)
 }
 
+const PARALLEL_PIXEL_THRESHOLD: usize = 800_000;
+
 /// Simplest: one rectangle per pixel
 fn pixel_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
-    let mut rects = Vec::new();
+    let total = bitmap.width as usize * bitmap.height as usize;
+    if total < PARALLEL_PIXEL_THRESHOLD {
+        return pixel_rects_serial(bitmap, pixel_w, pitch);
+    }
+    (0..bitmap.height)
+        .into_par_iter()
+        .flat_map_iter(|y| {
+            let y0 = (bitmap.height - 1 - y) as i32 * pitch;
+            (0..bitmap.width).filter_map(move |x| {
+                if bitmap.get(x, y) {
+                    let x0 = x as i32 * pitch;
+                    Some(Rect::new(x0, y0, x0 + pixel_w, y0 + pixel_w))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
+}
+
+fn pixel_rects_serial(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
+    let mut rects = Vec::with_capacity(bitmap.metal_count());
     for y in 0..bitmap.height {
         for x in 0..bitmap.width {
             if bitmap.get(x, y) {
                 let x0 = x as i32 * pitch;
-                let y0 = (bitmap.height - 1 - y) as i32 * pitch; // flip Y
+                let y0 = (bitmap.height - 1 - y) as i32 * pitch;
                 rects.push(Rect::new(x0, y0, x0 + pixel_w, y0 + pixel_w));
             }
         }
@@ -144,19 +168,14 @@ fn pixel_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
 
 /// Merge horizontally adjacent pixels into runs
 fn row_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
-    let mut rects = Vec::new();
-
+    let mut rects = Vec::with_capacity(bitmap.metal_count());
     for y in 0..bitmap.height {
         let y0 = (bitmap.height - 1 - y) as i32 * pitch;
         let mut run_start: Option<u32> = None;
-
         for x in 0..=bitmap.width {
             let on = x < bitmap.width && bitmap.get(x, y);
-
             match (on, run_start) {
-                (true, None) => {
-                    run_start = Some(x);
-                }
+                (true, None) => run_start = Some(x),
                 (false, Some(start)) => {
                     let x0 = start as i32 * pitch;
                     let x1 = (x - 1) as i32 * pitch + pixel_w;
@@ -167,8 +186,19 @@ fn row_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rec
             }
         }
     }
-
     rects
+}
+
+/// Effective run length from (x, y), clipped at the first already-used pixel.
+fn effective_run(runs: &[u32], used: &[u64], w: usize, x: usize, y: usize) -> u32 {
+    let raw = runs[y * w + x] as usize;
+    for dx in 0..raw {
+        let idx = y * w + x + dx;
+        if used[idx / 64] & (1u64 << (idx % 64)) != 0 {
+            return dx as u32;
+        }
+    }
+    raw as u32
 }
 
 /// Greedy maximal rectangle merging (row-then-column)
@@ -176,10 +206,11 @@ fn greedy_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<
     let w = bitmap.width as usize;
     let h = bitmap.height as usize;
 
-    // First pass: compute horizontal runs
-    // runs[y][x] = number of consecutive "on" pixels starting at (x, y) going right
-    let mut runs = vec![vec![0u32; w]; h];
-    for (y, row) in runs.iter_mut().enumerate() {
+    // First pass: compute horizontal runs in a flat array for cache locality
+    // runs[y * w + x] = number of consecutive "on" pixels starting at (x, y) going right
+    let mut runs = vec![0u32; w * h];
+    for y in 0..h {
+        let row_off = y * w;
         let mut count = 0u32;
         for x in (0..w).rev() {
             if bitmap.get(x as u32, y as u32) {
@@ -187,32 +218,35 @@ fn greedy_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<
             } else {
                 count = 0;
             }
-            row[x] = count;
+            runs[row_off + x] = count;
         }
     }
 
     // Second pass: for each cell, try to extend downward to form maximal rects
-    let mut used = vec![vec![false; w]; h];
-    let mut rects = Vec::new();
+    let mut used = vec![0u64; (w * h).div_ceil(64)];
+    let mut rects = Vec::with_capacity(bitmap.metal_count());
 
     for y in 0..h {
         for x in 0..w {
-            if used[y][x] || !bitmap.get(x as u32, y as u32) {
+            let idx = y * w + x;
+            if used[idx / 64] & (1u64 << (idx % 64)) != 0 || !bitmap.get(x as u32, y as u32) {
                 continue;
             }
 
             // Find the widest rectangle starting at (x, y) extending down
-            let mut min_run = runs[y][x];
+            let mut min_run = effective_run(&runs, &used, w, x, y);
             let mut best_area = 0u64;
             let mut best_w = 0u32;
             let mut best_h = 0u32;
 
             for dy in 0..(h - y) {
                 let cy = y + dy;
-                if !bitmap.get(x as u32, cy as u32) || used[cy][x] {
+                let cidx = cy * w + x;
+                if !bitmap.get(x as u32, cy as u32) || used[cidx / 64] & (1u64 << (cidx % 64)) != 0
+                {
                     break;
                 }
-                min_run = min_run.min(runs[cy][x]);
+                min_run = min_run.min(effective_run(&runs, &used, w, x, cy));
                 let area = min_run as u64 * (dy as u64 + 1);
                 if area > best_area {
                     best_area = area;
@@ -223,8 +257,10 @@ fn greedy_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<
 
             // Mark used
             for dy in 0..best_h as usize {
+                let row_off = (y + dy) * w;
                 for dx in 0..best_w as usize {
-                    used[y + dy][x + dx] = true;
+                    let uidx = row_off + x + dx;
+                    used[uidx / 64] |= 1u64 << (uidx % 64);
                 }
             }
 
@@ -258,11 +294,7 @@ mod tests {
     use super::*;
 
     fn test_bitmap() -> ArtworkBitmap {
-        ArtworkBitmap {
-            width: 4,
-            height: 2,
-            pixels: vec![true, true, true, false, false, true, true, true],
-        }
+        ArtworkBitmap::from_bools(4, 2, &[true, true, true, false, false, true, true, true])
     }
 
     #[test]
@@ -282,11 +314,7 @@ mod tests {
 
     #[test]
     fn test_greedy_merge() {
-        let bmp = ArtworkBitmap {
-            width: 3,
-            height: 3,
-            pixels: vec![true, true, true, true, true, true, true, true, true],
-        };
+        let bmp = ArtworkBitmap::from_bools(3, 3, &vec![true; 9]);
         let rects = greedy_merged_rects(&bmp, 100, 100);
         // Should produce a single rectangle
         assert_eq!(rects.len(), 1);
