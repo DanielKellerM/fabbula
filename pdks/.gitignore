@@ -1,0 +1,7 @@
+# Track open-source PDK configurations
+!sky130.toml
+!ihp_sg13g2.toml
+!gf180mcu.toml
+
+# Safely ignore PDKs under NDA
+*.toml

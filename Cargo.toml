@@ -1,0 +1,41 @@
+[package]
+name = "fabbula"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-PDK, DRC-aware image-to-GDSII artwork generator"
+license = "Apache-2.0"
+keywords = ["gdsii", "asic", "chip-art", "pdk", "eda"]
+categories = ["science", "command-line-utilities"]
+
+[dependencies]
+# GDSII I/O — gds21 is mature, serde-friendly, and part of Layout21
+gds21 = "0.2"
+
+# Image processing
+image = "0.25"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Config / PDK definitions
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Parallelism for large images
+rayon = "1"
+
+# R-tree spatial index for scalable DRC
+rstar = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
