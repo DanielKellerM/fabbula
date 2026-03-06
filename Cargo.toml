@@ -48,6 +48,10 @@ codegen-units = 1
 name = "gen_test_image"
 path = "profiling/gen_test_image.rs"
 
+[[bin]]
+name = "profile_hotpaths"
+path = "profiling/profile_hotpaths.rs"
+
 [[bench]]
 name = "bench_drc"
 harness = false

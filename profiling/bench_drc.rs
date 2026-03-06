@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use fabbula::drc::{check_drc, DrcRule};
+use fabbula::drc::{check_density_only, check_drc, DrcRule};
 use fabbula::pdk::PdkConfig;
 use fabbula::polygon::Rect;
 
@@ -95,11 +95,29 @@ fn bench_drc_100k_clean(c: &mut Criterion) {
     });
 }
 
+fn bench_density_only_50k(c: &mut Criterion) {
+    let mut pdk = PdkConfig::builtin("sky130").unwrap();
+    pdk.drc.density_max = 0.77;
+    pdk.drc.density_window_um = 50.0;
+    let rects = make_grid(224);
+    c.bench_function("density_only_50k", |b| {
+        b.iter(|| {
+            let _ = check_density_only(
+                black_box(&rects),
+                pdk.pdk.db_units_per_um,
+                &pdk.drc,
+                None,
+            );
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_drc_12k_clean,
     bench_drc_12k_with_density,
     bench_drc_50k_clean,
     bench_drc_100k_clean,
+    bench_density_only_50k,
 );
 criterion_main!(benches);

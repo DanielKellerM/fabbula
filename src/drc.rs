@@ -93,7 +93,7 @@ impl std::fmt::Display for DrcViolation {
 /// Wrapper for Rect that implements RTreeObject
 #[derive(Debug, Clone, Copy)]
 struct IndexedRect {
-    index: usize,
+    index: u32,
     rect: Rect,
 }
 
@@ -109,13 +109,44 @@ fn build_rtree(rects: &[Rect]) -> RTree<IndexedRect> {
     let indexed: Vec<IndexedRect> = rects
         .iter()
         .enumerate()
-        .map(|(i, r)| IndexedRect { index: i, rect: *r })
+        .map(|(i, r)| IndexedRect {
+            index: i as u32,
+            rect: *r,
+        })
         .collect();
     RTree::bulk_load(indexed)
 }
 
 fn capped(violations: &[DrcViolation], cap: Option<usize>) -> bool {
     cap.is_some_and(|c| violations.len() >= c)
+}
+
+/// Manhattan distance between two non-overlapping rectangles.
+/// Returns 0 if they touch or overlap.
+#[inline]
+fn rect_spacing(a: &Rect, b: &Rect) -> i32 {
+    let dx = if a.x1 <= b.x0 {
+        b.x0 - a.x1
+    } else if b.x1 <= a.x0 {
+        a.x0 - b.x1
+    } else {
+        0
+    };
+
+    let dy = if a.y1 <= b.y0 {
+        b.y0 - a.y1
+    } else if b.y1 <= a.y0 {
+        a.y0 - b.y1
+    } else {
+        0
+    };
+
+    // Manhattan spacing for DRC is typically checked per-axis
+    if dx > 0 && dy > 0 {
+        dx.min(dy)
+    } else {
+        dx.max(dy)
+    }
 }
 
 /// Run DRC checks on generated polygons using R-tree for scalable spacing checks.
@@ -127,7 +158,7 @@ fn capped(violations: &[DrcViolation], cap: Option<usize>) -> bool {
 /// 3. Minimum spacing (R-tree accelerated, O(n log n))
 /// 4. Wide-metal spacing (Cu layers)
 /// 5. Minimum area
-/// 6. Metal density (window-based)
+/// 6. Metal density (SAT-accelerated window-based)
 pub fn check_drc(rects: &[Rect], db_units_per_um: u32, drc: &DrcRules) -> Vec<DrcViolation> {
     check_drc_capped(rects, db_units_per_um, drc, None)
 }
@@ -159,57 +190,55 @@ pub fn check_drc_capped(
 
     let use_parallel = max_violations.is_none() && rects.len() >= PARALLEL_RECT_THRESHOLD;
 
-    // Check widths, max width, and area
+    // Check widths, max width, and area - zero-allocation iterator chains
     if use_parallel {
         let width_area_violations: Vec<DrcViolation> = rects
             .par_iter()
             .enumerate()
             .flat_map_iter(|(i, r)| {
-                let mut local = Vec::new();
-                if r.width() < min_w_dbu {
-                    local.push(DrcViolation {
-                        rule: DrcRule::MinWidth,
-                        rect_index: i as u32,
+                let idx = i as u32;
+                let loc = (r.x0, r.y0);
+                let width_v = (r.width() < min_w_dbu).then(|| DrcViolation {
+                    rule: DrcRule::MinWidth,
+                    rect_index: idx,
+                    other_index: 0,
+                    value: r.width() as i64,
+                    limit: min_w_dbu as i64,
+                    location: loc,
+                });
+                let height_v = (r.height() < min_w_dbu).then(|| DrcViolation {
+                    rule: DrcRule::MinWidth,
+                    rect_index: idx,
+                    other_index: 0,
+                    value: r.height() as i64,
+                    limit: min_w_dbu as i64,
+                    location: loc,
+                });
+                let max_w_v = max_w_dbu.and_then(|max_w| {
+                    (r.width() > max_w || r.height() > max_w).then(|| DrcViolation {
+                        rule: DrcRule::MaxWidth,
+                        rect_index: idx,
                         other_index: 0,
-                        value: r.width() as i64,
-                        limit: min_w_dbu as i64,
-                        location: (r.x0, r.y0),
-                    });
-                }
-                if r.height() < min_w_dbu {
-                    local.push(DrcViolation {
-                        rule: DrcRule::MinWidth,
-                        rect_index: i as u32,
-                        other_index: 0,
-                        value: r.height() as i64,
-                        limit: min_w_dbu as i64,
-                        location: (r.x0, r.y0),
-                    });
-                }
-                if let Some(max_w) = max_w_dbu {
-                    if r.width() > max_w || r.height() > max_w {
-                        let dim = r.width().max(r.height());
-                        local.push(DrcViolation {
-                            rule: DrcRule::MaxWidth,
-                            rect_index: i as u32,
-                            other_index: 0,
-                            value: dim as i64,
-                            limit: max_w as i64,
-                            location: (r.x0, r.y0),
-                        });
-                    }
-                }
-                if min_area_dbu2 > 0 && r.area() < min_area_dbu2 {
-                    local.push(DrcViolation {
+                        value: r.width().max(r.height()) as i64,
+                        limit: max_w as i64,
+                        location: loc,
+                    })
+                });
+                let area_v = (min_area_dbu2 > 0 && r.area() < min_area_dbu2).then(|| {
+                    DrcViolation {
                         rule: DrcRule::MinArea,
-                        rect_index: i as u32,
+                        rect_index: idx,
                         other_index: 0,
                         value: r.area(),
                         limit: min_area_dbu2,
-                        location: (r.x0, r.y0),
-                    });
-                }
-                local.into_iter()
+                        location: loc,
+                    }
+                });
+                width_v
+                    .into_iter()
+                    .chain(height_v)
+                    .chain(max_w_v)
+                    .chain(area_v)
             })
             .collect();
         violations.extend(width_area_violations);
@@ -218,56 +247,57 @@ pub fn check_drc_capped(
             if capped(&violations, max_violations) {
                 return violations;
             }
+            let idx = i as u32;
+            let loc = (r.x0, r.y0);
             if r.width() < min_w_dbu {
                 violations.push(DrcViolation {
                     rule: DrcRule::MinWidth,
-                    rect_index: i as u32,
+                    rect_index: idx,
                     other_index: 0,
                     value: r.width() as i64,
                     limit: min_w_dbu as i64,
-                    location: (r.x0, r.y0),
+                    location: loc,
                 });
             }
             if r.height() < min_w_dbu {
                 violations.push(DrcViolation {
                     rule: DrcRule::MinWidth,
-                    rect_index: i as u32,
+                    rect_index: idx,
                     other_index: 0,
                     value: r.height() as i64,
                     limit: min_w_dbu as i64,
-                    location: (r.x0, r.y0),
+                    location: loc,
                 });
             }
             if let Some(max_w) = max_w_dbu {
                 if r.width() > max_w || r.height() > max_w {
-                    let dim = r.width().max(r.height());
                     violations.push(DrcViolation {
                         rule: DrcRule::MaxWidth,
-                        rect_index: i as u32,
+                        rect_index: idx,
                         other_index: 0,
-                        value: dim as i64,
+                        value: r.width().max(r.height()) as i64,
                         limit: max_w as i64,
-                        location: (r.x0, r.y0),
+                        location: loc,
                     });
                 }
             }
             if min_area_dbu2 > 0 && r.area() < min_area_dbu2 {
                 violations.push(DrcViolation {
                     rule: DrcRule::MinArea,
-                    rect_index: i as u32,
+                    rect_index: idx,
                     other_index: 0,
                     value: r.area(),
                     limit: min_area_dbu2,
-                    location: (r.x0, r.y0),
+                    location: loc,
                 });
             }
         }
     }
 
-    // Build R-tree once, share between spacing and density checks
+    // Build R-tree for spacing checks
     let tree = build_rtree(rects);
 
-    // R-tree accelerated spacing check
+    // R-tree accelerated spacing check - zero-allocation iterator chains
     let search_margin = match wide_s_dbu {
         Some(ws) => min_s_dbu.max(ws),
         None => min_s_dbu,
@@ -278,44 +308,39 @@ pub fn check_drc_capped(
             .par_iter()
             .enumerate()
             .flat_map_iter(|(i, r)| {
-                let mut local = Vec::new();
                 let search_env = AABB::from_corners(
                     [r.x0 - search_margin, r.y0 - search_margin],
                     [r.x1 + search_margin, r.y1 + search_margin],
                 );
-                for neighbor in tree.locate_in_envelope_intersecting(&search_env) {
-                    if neighbor.index <= i {
-                        continue;
-                    }
-                    let dist = rect_spacing(r, &neighbor.rect);
-                    if dist <= 0 {
-                        continue;
-                    }
-                    let (effective_spacing, rule_kind) =
-                        if let (Some(thresh), Some(ws)) = (wide_thresh_dbu, wide_s_dbu) {
-                            let a_wide = r.width() >= thresh || r.height() >= thresh;
-                            let b_wide =
-                                neighbor.rect.width() >= thresh || neighbor.rect.height() >= thresh;
-                            if a_wide || b_wide {
-                                (ws, DrcRule::WideMetalSpacing)
+                tree.locate_in_envelope_intersecting(&search_env)
+                    .filter(move |neighbor| neighbor.index as usize > i)
+                    .filter_map(move |neighbor| {
+                        let dist = rect_spacing(r, &neighbor.rect);
+                        if dist <= 0 {
+                            return None;
+                        }
+                        let (effective_spacing, rule_kind) =
+                            if let (Some(thresh), Some(ws)) = (wide_thresh_dbu, wide_s_dbu) {
+                                let a_wide = r.width() >= thresh || r.height() >= thresh;
+                                let b_wide = neighbor.rect.width() >= thresh
+                                    || neighbor.rect.height() >= thresh;
+                                if a_wide || b_wide {
+                                    (ws, DrcRule::WideMetalSpacing)
+                                } else {
+                                    (min_s_dbu, DrcRule::MinSpacing)
+                                }
                             } else {
                                 (min_s_dbu, DrcRule::MinSpacing)
-                            }
-                        } else {
-                            (min_s_dbu, DrcRule::MinSpacing)
-                        };
-                    if dist < effective_spacing {
-                        local.push(DrcViolation {
+                            };
+                        (dist < effective_spacing).then_some(DrcViolation {
                             rule: rule_kind,
                             rect_index: i as u32,
-                            other_index: neighbor.index as u32,
+                            other_index: neighbor.index,
                             value: dist as i64,
                             limit: effective_spacing as i64,
                             location: (r.x0, r.y0),
-                        });
-                    }
-                }
-                local.into_iter()
+                        })
+                    })
             })
             .collect();
         violations.extend(spacing_violations);
@@ -329,7 +354,7 @@ pub fn check_drc_capped(
                 [r.x1 + search_margin, r.y1 + search_margin],
             );
             for neighbor in tree.locate_in_envelope_intersecting(&search_env) {
-                if neighbor.index <= i {
+                if (neighbor.index as usize) <= i {
                     continue;
                 }
                 let dist = rect_spacing(r, &neighbor.rect);
@@ -353,7 +378,7 @@ pub fn check_drc_capped(
                     violations.push(DrcViolation {
                         rule: rule_kind,
                         rect_index: i as u32,
-                        other_index: neighbor.index as u32,
+                        other_index: neighbor.index,
                         value: dist as i64,
                         limit: effective_spacing as i64,
                         location: (r.x0, r.y0),
@@ -363,9 +388,8 @@ pub fn check_drc_capped(
         }
     }
 
-    // Density check - reuse the same R-tree
+    // Density check using SAT (no longer needs R-tree)
     check_density(
-        &tree,
         rects,
         db_units_per_um,
         drc,
@@ -376,10 +400,11 @@ pub fn check_drc_capped(
     violations
 }
 
-/// Check metal density using a sliding window approach, reusing the shared R-tree.
-/// Uses integer-only arithmetic in the inner loop.
+/// Check metal density using SAT (summed area table) for O(1) per-window queries.
+///
+/// Rasterizes rect metal area into a grid (cell = half-window step), builds a 2D prefix
+/// sum, then queries each sliding window position in constant time.
 fn check_density(
-    tree: &RTree<IndexedRect>,
     rects: &[Rect],
     db_units_per_um: u32,
     drc: &DrcRules,
@@ -400,91 +425,153 @@ fn check_density(
         return;
     }
 
-    // Pre-compute integer thresholds (permille precision)
+    let step = (window_dbu / 2).max(1);
     let window_area_i64 = window_dbu as i64 * window_dbu as i64;
     let max_metal = (drc.density_max * window_area_i64 as f64) as i64;
     let min_metal = (drc.density_min * window_area_i64 as f64) as i64;
     let density_max_permille = (drc.density_max * 1000.0) as i64;
     let density_min_permille = (drc.density_min * 1000.0) as i64;
 
-    // Step by half-window for reasonable coverage without being too slow
-    let step = (window_dbu / 2).max(1);
+    // Grid covers bounding box; each cell = step x step dbu
+    let grid_x0 = bb.x0;
+    let grid_y0 = bb.y0;
+    let grid_w = ((bb.x1 - bb.x0) as usize).div_ceil(step as usize);
+    let grid_h = ((bb.y1 - bb.y0) as usize).div_ceil(step as usize);
 
-    let mut wx = bb.x0;
-    while wx + window_dbu <= bb.x1 {
-        let mut wy = bb.y0;
-        while wy + window_dbu <= bb.y1 {
-            if capped(violations, max_violations) {
-                return;
-            }
+    if grid_w == 0 || grid_h == 0 {
+        return;
+    }
 
-            let search_env = AABB::from_corners([wx, wy], [wx + window_dbu, wy + window_dbu]);
-            let mut metal_area: i64 = 0;
-            for ir in tree.locate_in_envelope_intersecting(&search_env) {
-                // Clip rect to window - pure integer
-                let cx0 = ir.rect.x0.max(wx);
-                let cy0 = ir.rect.y0.max(wy);
-                let cx1 = ir.rect.x1.min(wx + window_dbu);
-                let cy1 = ir.rect.y1.min(wy + window_dbu);
+    // Rasterize: compute metal area per grid cell
+    let mut grid = vec![0i64; grid_w * grid_h];
+    for r in rects {
+        let gx0 = ((r.x0 - grid_x0) / step).max(0) as usize;
+        let gy0 = ((r.y0 - grid_y0) / step).max(0) as usize;
+        let gx1 = (((r.x1 - grid_x0) + step - 1) / step).max(0) as usize;
+        let gy1 = (((r.y1 - grid_y0) + step - 1) / step).max(0) as usize;
+        let gx1 = gx1.min(grid_w);
+        let gy1 = gy1.min(grid_h);
+
+        for gy in gy0..gy1 {
+            for gx in gx0..gx1 {
+                // Clip rect to cell boundaries for exact area
+                let cx0 = (grid_x0 + gx as i32 * step).max(r.x0);
+                let cy0 = (grid_y0 + gy as i32 * step).max(r.y0);
+                let cx1 = (grid_x0 + (gx as i32 + 1) * step).min(r.x1);
+                let cy1 = (grid_y0 + (gy as i32 + 1) * step).min(r.y1);
                 if cx1 > cx0 && cy1 > cy0 {
-                    metal_area += (cx1 - cx0) as i64 * (cy1 - cy0) as i64;
+                    grid[gy * grid_w + gx] += (cx1 - cx0) as i64 * (cy1 - cy0) as i64;
                 }
             }
+        }
+    }
 
-            if metal_area > max_metal {
-                // Convert to permille only for the violation record
-                let density_permille = metal_area * 1000 / window_area_i64;
-                violations.push(DrcViolation {
+    // Build SAT with dimensions (grid_w+1) x (grid_h+1)
+    let sat_w = grid_w + 1;
+    let mut sat = vec![0i64; sat_w * (grid_h + 1)];
+    for gy in 0..grid_h {
+        let mut row_sum = 0i64;
+        for gx in 0..grid_w {
+            row_sum += grid[gy * grid_w + gx];
+            sat[(gy + 1) * sat_w + (gx + 1)] = row_sum + sat[gy * sat_w + (gx + 1)];
+        }
+    }
+
+    // Window = window_dbu = 2 * step, so each window covers window_cells grid cells
+    let window_cells = (window_dbu / step) as usize;
+
+    // Collect all valid window positions
+    let use_parallel = rects.len() >= PARALLEL_RECT_THRESHOLD && max_violations.is_none();
+
+    if use_parallel {
+        // Build all (wx, wy) positions
+        let mut positions = Vec::new();
+        let mut wx = bb.x0;
+        while wx + window_dbu <= bb.x1 {
+            let mut wy = bb.y0;
+            while wy + window_dbu <= bb.y1 {
+                positions.push((wx, wy));
+                wy += step;
+            }
+            wx += step;
+        }
+
+        let density_violations: Vec<DrcViolation> = positions
+            .par_iter()
+            .flat_map_iter(|&(wx, wy)| {
+                let gx0 = ((wx - grid_x0) / step) as usize;
+                let gy0 = ((wy - grid_y0) / step) as usize;
+                let gx1 = (gx0 + window_cells).min(grid_w);
+                let gy1 = (gy0 + window_cells).min(grid_h);
+
+                let metal_area = sat[gy1 * sat_w + gx1] - sat[gy0 * sat_w + gx1]
+                    - sat[gy1 * sat_w + gx0]
+                    + sat[gy0 * sat_w + gx0];
+
+                let max_v = (metal_area > max_metal).then(|| DrcViolation {
                     rule: DrcRule::DensityMax,
                     rect_index: 0,
                     other_index: 0,
-                    value: density_permille,
+                    value: metal_area * 1000 / window_area_i64,
                     limit: density_max_permille,
                     location: (wx, wy),
                 });
-            }
-            if min_metal > 0 && metal_area < min_metal {
-                let density_permille = metal_area * 1000 / window_area_i64;
-                violations.push(DrcViolation {
+                let min_v = (min_metal > 0 && metal_area < min_metal).then(|| DrcViolation {
                     rule: DrcRule::DensityMin,
                     rect_index: 0,
                     other_index: 0,
-                    value: density_permille,
+                    value: metal_area * 1000 / window_area_i64,
                     limit: density_min_permille,
                     location: (wx, wy),
                 });
+                max_v.into_iter().chain(min_v)
+            })
+            .collect();
+        violations.extend(density_violations);
+    } else {
+        let mut wx = bb.x0;
+        while wx + window_dbu <= bb.x1 {
+            let mut wy = bb.y0;
+            while wy + window_dbu <= bb.y1 {
+                if capped(violations, max_violations) {
+                    return;
+                }
+
+                let gx0 = ((wx - grid_x0) / step) as usize;
+                let gy0 = ((wy - grid_y0) / step) as usize;
+                let gx1 = (gx0 + window_cells).min(grid_w);
+                let gy1 = (gy0 + window_cells).min(grid_h);
+
+                let metal_area = sat[gy1 * sat_w + gx1] - sat[gy0 * sat_w + gx1]
+                    - sat[gy1 * sat_w + gx0]
+                    + sat[gy0 * sat_w + gx0];
+
+                if metal_area > max_metal {
+                    let density_permille = metal_area * 1000 / window_area_i64;
+                    violations.push(DrcViolation {
+                        rule: DrcRule::DensityMax,
+                        rect_index: 0,
+                        other_index: 0,
+                        value: density_permille,
+                        limit: density_max_permille,
+                        location: (wx, wy),
+                    });
+                }
+                if min_metal > 0 && metal_area < min_metal {
+                    let density_permille = metal_area * 1000 / window_area_i64;
+                    violations.push(DrcViolation {
+                        rule: DrcRule::DensityMin,
+                        rect_index: 0,
+                        other_index: 0,
+                        value: density_permille,
+                        limit: density_min_permille,
+                        location: (wx, wy),
+                    });
+                }
+                wy += step;
             }
-            wy += step;
+            wx += step;
         }
-        wx += step;
-    }
-}
-
-/// Manhattan distance between two non-overlapping rectangles.
-/// Returns 0 if they touch or overlap.
-fn rect_spacing(a: &Rect, b: &Rect) -> i32 {
-    let dx = if a.x1 <= b.x0 {
-        b.x0 - a.x1
-    } else if b.x1 <= a.x0 {
-        a.x0 - b.x1
-    } else {
-        0
-    };
-
-    let dy = if a.y1 <= b.y0 {
-        b.y0 - a.y1
-    } else if b.y1 <= a.y0 {
-        a.y0 - b.y1
-    } else {
-        0
-    };
-
-    // Manhattan spacing for DRC is typically checked per-axis
-    if dx > 0 && dy > 0 {
-        // Rects are diagonal - return the smaller axis distance
-        dx.min(dy)
-    } else {
-        dx.max(dy)
     }
 }
 
@@ -500,9 +587,7 @@ pub fn check_density_only(
     if drc.density_max >= 1.0 && drc.density_min <= 0.0 {
         return violations;
     }
-    let tree = build_rtree(rects);
     check_density(
-        &tree,
         rects,
         db_units_per_um,
         drc,

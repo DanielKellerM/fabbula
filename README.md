@@ -1,21 +1,23 @@
 <div align="center">
+<table><tr>
+<td><img src="fabbula.png" alt="fabbula" width="200"></td>
+<td>
 
 # fabbula
 
-**Turn AI dreams into silicon stories.**
-
 *A prompt was whispered, pixels took their form,*
 *Through vectors traced and grids precisely worn,*
-*The fab receives what neural minds compose-*
+*The fab receives what neural minds compose --*
 *In metal etched, a fabbula is born.*
 
----
+</td>
+</tr></table>
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Getting Started](#getting-started) · [How It Works](#how-it-works) · [Supported PDKs](#supported-pdks) · [Performance](#performance) · [Prompt Guide](#prompt-guide) · [Roadmap](#roadmap)
+[Getting Started](#getting-started) · [Examples](#examples) · [How It Works](#how-it-works) · [Supported PDKs](#supported-pdks) · [Performance](#performance) · [Prompt Guide](#prompt-guide) · [Roadmap](#roadmap)
 
 </div>
 
@@ -32,6 +34,16 @@ In the open-source chip community, there's a long tradition of hiding art on the
 ```
 prompt → AI image → fabbula → GDSII → tapeout → your art lives in silicon forever
 ```
+
+## Examples
+
+| Input | SKY130 | IHP SG13G2 | GF180MCU |
+|:-----:|:------:|:----------:|:--------:|
+| <img src="media/input/beluga.png" width="200"> | <img src="media/output/beluga_sky130.svg" width="200"> | <img src="media/output/beluga_ihp.svg" width="200"> | <img src="media/output/beluga_gf180.svg" width="200"> |
+| <img src="media/input/bear.png" width="200"> | <img src="media/output/bear_sky130.svg" width="200"> | | |
+| <img src="media/input/super_beluga.png" width="200"> | <img src="media/output/super_beluga_sky130.svg" width="200"> | | |
+
+> [Interactive HTML previews](https://dkeller.github.io/fabbula/) with pan and zoom - powered by fabbula's built-in viewer.
 
 ## Why fabbula?
 
