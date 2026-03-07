@@ -287,7 +287,7 @@ fn snapshot_generate_strategies() {
 }
 
 // ---------------------------------------------------------------------------
-// generate --check-drc - all PDKs pass
+// DRC check runs by default for all PDKs
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -315,7 +315,6 @@ fn generate_check_drc_all_pdks() {
                 pdk,
                 "--threshold",
                 "128",
-                "--check-drc",
             ])
             .assert()
             .success();
@@ -344,7 +343,6 @@ fn generate_separated_mode() {
             "--threshold",
             "128",
             "--separated",
-            "--check-drc",
         ])
         .assert()
         .success();

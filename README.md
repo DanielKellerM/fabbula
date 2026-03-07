@@ -163,6 +163,29 @@ fabbula merge -i logo.png --chip my_chip.gds -o my_chip_art.gds \
     -p sky130 --exclusion-margin 20.0 --exclusion-layer 71/20
 ```
 
+### DRC coverage
+
+fabbula checks and enforces these rules by construction or validation:
+
+| Rule | Enforced | Method |
+|------|----------|--------|
+| Min width | Yes | By construction (pixel = min_width) |
+| Min spacing | Yes | By construction (gap = min_spacing) |
+| Wide-metal spacing | Yes | By construction (pitch uses effective_spacing) |
+| Max width (slotting) | Partial | Splits wide merged rects; does not insert real slots |
+| Min area | Yes | Post-generation filter removes small rects |
+| Max density | Yes | Bitmap-level enforcement + feedback loop |
+| Min density | No | Not enforced (artwork is typically sparse) |
+
+Rules **not** checked (not applicable to floating top-metal artwork):
+
+- Enclosure / overlap rules (no vias generated)
+- Antenna rules (floating metal, no gate oxide path)
+- Acute angle / notch rules (only axis-aligned rectangles)
+- Off-grid checks (all coordinates snapped to manufacturing grid)
+- Same-net spacing (artwork is electrically isolated)
+- Via density, metal-to-via spacing
+
 ### After generation
 
 - Re-run foundry DRC after dummy fill insertion (the foundry's fill tool adds metal around your artwork)

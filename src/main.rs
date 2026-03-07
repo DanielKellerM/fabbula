@@ -76,7 +76,7 @@ enum Commands {
         #[arg(long, default_value = "artwork")]
         cell_name: String,
 
-        /// Threshold for converting image to binary (0-255, or "otsu" for automatic)
+        /// Threshold for converting image to binary (0-255, "otsu", or "auto" for otsu + auto-polarity)
         #[arg(long, default_value = "128")]
         threshold: String,
 
@@ -105,6 +105,14 @@ enum Commands {
         #[arg(long)]
         invert: bool,
 
+        /// Rotate artwork clockwise (0, 90, 180, 270 degrees)
+        #[arg(long, default_value = "0")]
+        rotate: u32,
+
+        /// Flip artwork (horizontal or vertical)
+        #[arg(long, value_enum)]
+        flip: Option<FlipArg>,
+
         /// Output SVG preview file
         #[arg(long)]
         svg: Option<PathBuf>,
@@ -117,9 +125,9 @@ enum Commands {
         #[arg(long)]
         lef: Option<PathBuf>,
 
-        /// Run DRC check on output
+        /// Skip DRC check on output (DRC is on by default)
         #[arg(long)]
-        check_drc: bool,
+        no_check_drc: bool,
 
         /// Disable automatic density enforcement (allow density violations)
         #[arg(long)]
@@ -136,6 +144,14 @@ enum Commands {
         /// Number of palette colors (for palette mode; defaults to number of artwork layers)
         #[arg(long)]
         num_colors: Option<usize>,
+
+        /// Continue despite density enforcement failures
+        #[arg(long)]
+        force: bool,
+
+        /// Dry run: run full pipeline (DRC, density) but skip writing GDS
+        #[arg(long)]
+        dry_run: bool,
 
         /// Generate deep zoom tile pyramid for HTML preview (requires --html)
         #[arg(long)]
@@ -204,6 +220,14 @@ enum Commands {
         #[arg(long)]
         invert: bool,
 
+        /// Rotate artwork clockwise (0, 90, 180, 270 degrees)
+        #[arg(long, default_value = "0")]
+        rotate: u32,
+
+        /// Flip artwork (horizontal or vertical)
+        #[arg(long, value_enum)]
+        flip: Option<FlipArg>,
+
         /// Exclusion margin in um - clear artwork pixels near existing metal
         #[arg(long)]
         exclusion_margin: Option<f64>,
@@ -219,6 +243,10 @@ enum Commands {
         /// Disable automatic density enforcement
         #[arg(long)]
         no_density_enforce: bool,
+
+        /// Continue despite density enforcement failures
+        #[arg(long)]
+        force: bool,
 
         /// Color extraction mode for multi-layer output
         #[arg(long, default_value = "single", value_enum)]
@@ -257,6 +285,14 @@ enum ColorModeArg {
     Palette,
 }
 
+#[derive(Debug, Clone, ValueEnum)]
+enum FlipArg {
+    /// Flip horizontally (left-right mirror)
+    Horizontal,
+    /// Flip vertically (top-bottom mirror)
+    Vertical,
+}
+
 impl From<StrategyArg> for PolygonStrategy {
     fn from(s: StrategyArg) -> Self {
         match s {
@@ -284,13 +320,15 @@ fn load_pdk(name_or_path: &str) -> Result<PdkConfig> {
 fn parse_threshold(s: &str) -> Result<ThresholdMode> {
     if s.eq_ignore_ascii_case("otsu") {
         Ok(ThresholdMode::Otsu)
+    } else if s.eq_ignore_ascii_case("auto") {
+        Ok(ThresholdMode::Auto)
     } else if s.eq_ignore_ascii_case("alpha") {
         Ok(ThresholdMode::Alpha(128))
     } else if let Ok(v) = s.parse::<u8>() {
         Ok(ThresholdMode::Luminance(v))
     } else {
         anyhow::bail!(
-            "Invalid threshold '{}': expected 'otsu', 'alpha', or a number 0-255",
+            "Invalid threshold '{}': expected 'otsu', 'auto', 'alpha', or a number 0-255",
             s
         )
     }
@@ -335,6 +373,7 @@ fn parse_size_um(s: &str, pdk: &PdkConfig, drc: &DrcRules, touching: bool) -> Re
     Ok((px_w, px_h))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_bitmap(
     input: &Path,
     threshold: &str,
@@ -342,6 +381,8 @@ fn prepare_bitmap(
     max_height: Option<u32>,
     invert: bool,
     dither: DitherMode,
+    rotate: u32,
+    flip: &Option<FlipArg>,
 ) -> Result<ArtworkBitmap> {
     let thresh = parse_threshold(threshold)?;
     let max_px = match (max_width, max_height) {
@@ -353,6 +394,14 @@ fn prepare_bitmap(
     let mut bitmap = load_artwork(input, thresh, max_px, dither)?;
     if invert {
         bitmap.invert();
+    }
+    if rotate != 0 {
+        bitmap.rotate(rotate);
+    }
+    match flip {
+        Some(FlipArg::Horizontal) => bitmap.flip_horizontal(),
+        Some(FlipArg::Vertical) => bitmap.flip_vertical(),
+        None => {}
     }
     Ok(bitmap)
 }
@@ -369,6 +418,20 @@ fn parse_layer_spec(s: &str) -> Result<(i16, i16)> {
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid datatype in exclusion-layer"))?;
     Ok((layer, datatype))
+}
+
+fn apply_transforms(bitmap: &mut ArtworkBitmap, invert: bool, rotate: u32, flip: &Option<FlipArg>) {
+    if invert {
+        bitmap.invert();
+    }
+    if rotate != 0 {
+        bitmap.rotate(rotate);
+    }
+    match flip {
+        Some(FlipArg::Horizontal) => bitmap.flip_horizontal(),
+        Some(FlipArg::Vertical) => bitmap.flip_vertical(),
+        None => {}
+    }
 }
 
 fn report_bounds(layer_results: &[(Vec<Rect>, &ArtworkLayerProfile)], pdk: &PdkConfig) {
@@ -417,17 +480,26 @@ fn main() -> Result<()> {
             max_height,
             size_um,
             invert,
+            rotate,
+            flip,
             svg,
             html,
             lef,
-            check_drc: do_drc,
+            no_check_drc,
             no_density_enforce,
             dither,
             color_mode,
             num_colors,
+            force,
+            dry_run,
             deep_zoom,
             tile_resolution,
         } => {
+            anyhow::ensure!(
+                matches!(rotate, 0 | 90 | 180 | 270),
+                "rotate must be 0, 90, 180, or 270 (got {})",
+                rotate
+            );
             let pdk = load_pdk(&pdk)?;
             let strategy: PolygonStrategy = strategy.into();
             let placement = if separated {
@@ -477,6 +549,8 @@ fn main() -> Result<()> {
                         max_height,
                         invert,
                         dither_mode,
+                        rotate,
+                        &flip,
                     )?;
                     tracing::info!(
                         "Bitmap: {}x{}, density: {:.1}%",
@@ -492,6 +566,7 @@ fn main() -> Result<()> {
                         strategy,
                         placement,
                         density_enforce,
+                        force,
                     )?;
                     layer_results.push((rects, profile));
                 }
@@ -504,9 +579,7 @@ fn main() -> Result<()> {
                         layer_index,
                     } in layer_bitmaps
                     {
-                        if invert {
-                            bitmap.invert();
-                        }
+                        apply_transforms(&mut bitmap, invert, rotate, &flip);
                         let profile = &profiles[layer_index];
                         let rects = generate_layer_polygons(
                             &mut bitmap,
@@ -515,6 +588,7 @@ fn main() -> Result<()> {
                             strategy,
                             placement,
                             density_enforce,
+                            force,
                         )?;
                         layer_results.push((rects, profile));
                     }
@@ -536,9 +610,7 @@ fn main() -> Result<()> {
                         layer_index,
                     } in layer_bitmaps
                     {
-                        if invert {
-                            bitmap.invert();
-                        }
+                        apply_transforms(&mut bitmap, invert, rotate, &flip);
                         let profile = &profiles[layer_index];
                         let rects = generate_layer_polygons(
                             &mut bitmap,
@@ -547,6 +619,7 @@ fn main() -> Result<()> {
                             strategy,
                             placement,
                             density_enforce,
+                            force,
                         )?;
                         layer_results.push((rects, profile));
                     }
@@ -557,7 +630,7 @@ fn main() -> Result<()> {
             report_bounds(&layer_results, &pdk);
 
             // DRC check per layer (uses each layer's own rules)
-            if do_drc {
+            if !no_check_drc {
                 for (rects, profile) in &layer_results {
                     tracing::info!("DRC check for layer '{}':", profile.name);
                     let violations = check_drc(rects, pdk.pdk.db_units_per_um, &profile.drc);
@@ -565,16 +638,25 @@ fn main() -> Result<()> {
                 }
             }
 
-            // Write GDS
-            let gds_layers: Vec<LayerRects> = layer_results
-                .iter()
-                .map(|(rects, profile)| LayerRects {
-                    rects,
-                    layer: profile.gds_layer,
-                    datatype: profile.gds_datatype,
-                })
-                .collect();
-            write_gds_multi(&gds_layers, &cell_name, &output)?;
+            // Write GDS (skip in dry-run mode)
+            if !dry_run {
+                let gds_layers: Vec<LayerRects> = layer_results
+                    .iter()
+                    .map(|(rects, profile)| LayerRects {
+                        rects,
+                        layer: profile.gds_layer,
+                        datatype: profile.gds_datatype,
+                    })
+                    .collect();
+                write_gds_multi(&gds_layers, &cell_name, &output)?;
+            } else {
+                let total_rects: usize = layer_results.iter().map(|(r, _)| r.len()).sum();
+                tracing::info!(
+                    "Dry run: skipping GDS write ({} polygons across {} layers)",
+                    total_rects,
+                    layer_results.len()
+                );
+            }
 
             // LEF
             if let Some(lef_path) = lef {
@@ -658,7 +740,11 @@ fn main() -> Result<()> {
                 }
             }
 
-            tracing::info!("Done! Output: {}", output.display());
+            if dry_run {
+                tracing::info!("Dry run complete (no files written)");
+            } else {
+                tracing::info!("Done! Output: {}", output.display());
+            }
         }
 
         Commands::Merge {
@@ -676,13 +762,21 @@ fn main() -> Result<()> {
             max_height,
             size_um,
             invert,
+            rotate,
+            flip,
             exclusion_margin,
             exclusion_layer,
             dither,
             no_density_enforce,
+            force,
             color_mode,
             num_colors,
         } => {
+            anyhow::ensure!(
+                matches!(rotate, 0 | 90 | 180 | 270),
+                "rotate must be 0, 90, 180, or 270 (got {})",
+                rotate
+            );
             let pdk = load_pdk(&pdk)?;
             let strategy: PolygonStrategy = strategy.into();
             let placement = if separated {
@@ -747,6 +841,8 @@ fn main() -> Result<()> {
                         max_height,
                         invert,
                         dither_mode,
+                        rotate,
+                        &flip,
                     )?;
 
                     if let (Some(margin_um), Some(existing)) = (exclusion_margin, &exclusion_metal)
@@ -763,6 +859,7 @@ fn main() -> Result<()> {
                         strategy,
                         placement,
                         density_enforce,
+                        force,
                     )?;
                     layer_results.push((rects, profile));
                 }
@@ -774,9 +871,7 @@ fn main() -> Result<()> {
                         layer_index,
                     } in layer_bitmaps
                     {
-                        if invert {
-                            bitmap.invert();
-                        }
+                        apply_transforms(&mut bitmap, invert, rotate, &flip);
                         if let (Some(margin_um), Some(existing)) =
                             (exclusion_margin, &exclusion_metal)
                         {
@@ -791,6 +886,7 @@ fn main() -> Result<()> {
                             strategy,
                             placement,
                             density_enforce,
+                            force,
                         )?;
                         layer_results.push((rects, profile));
                     }
@@ -811,9 +907,7 @@ fn main() -> Result<()> {
                         layer_index,
                     } in layer_bitmaps
                     {
-                        if invert {
-                            bitmap.invert();
-                        }
+                        apply_transforms(&mut bitmap, invert, rotate, &flip);
                         if let (Some(margin_um), Some(existing)) =
                             (exclusion_margin, &exclusion_metal)
                         {
@@ -828,6 +922,7 @@ fn main() -> Result<()> {
                             strategy,
                             placement,
                             density_enforce,
+                            force,
                         )?;
                         layer_results.push((rects, profile));
                     }

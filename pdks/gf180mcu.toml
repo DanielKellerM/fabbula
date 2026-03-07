@@ -25,8 +25,8 @@ gds_datatype = 0
 
 # DRC rules for Metal5
 [drc]
-min_width = 0.44
-min_spacing = 0.46
+min_width = 0.44          # DRM 14.6.1: minimum width
+min_spacing = 0.46        # DRM 14.6.2: minimum spacing (note: min_width != min_spacing)
 min_area = 0.0            # Not specified for Metal5 in DRM; 0 = conservative (no minimum)
 max_width = 30.0          # DRM 14.6.3: metal slotting required above 30 um
 density_min = 0.0

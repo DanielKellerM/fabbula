@@ -403,6 +403,27 @@ impl PdkConfig {
             self.grid.manufacturing_grid_um > 0.0,
             "Manufacturing grid must be positive"
         );
+        // Validate GDS layer/datatype ranges (i16 non-negative per GDSII spec)
+        Self::validate_gds_range(
+            "artwork_layer",
+            self.artwork_layer.gds_layer,
+            self.artwork_layer.gds_datatype,
+        )?;
+        if let Some(ref alt) = self.artwork_layer_alt {
+            Self::validate_gds_range("artwork_layer_alt", alt.gds_layer, alt.gds_datatype)?;
+        }
+        if let Some(ref layers) = self.artwork_layers {
+            for (i, profile) in layers.iter().enumerate() {
+                Self::validate_gds_range(
+                    &format!("artwork_layers[{}]", i),
+                    profile.gds_layer,
+                    profile.gds_datatype,
+                )?;
+            }
+        }
+        for (i, m) in self.metal_stack.iter().enumerate() {
+            Self::validate_gds_range(&format!("metal_stack[{}]", i), m.gds_layer, m.gds_datatype)?;
+        }
         // Check artwork_layer vs artwork_layer_alt GDS layer collision
         if let Some(ref alt) = self.artwork_layer_alt
             && self.artwork_layer.gds_layer == alt.gds_layer
@@ -414,6 +435,22 @@ impl PdkConfig {
                 self.artwork_layer.gds_datatype
             );
         }
+        Ok(())
+    }
+
+    fn validate_gds_range(section: &str, layer: i16, datatype: i16) -> Result<()> {
+        anyhow::ensure!(
+            layer >= 0,
+            "{} gds_layer ({}) must be non-negative",
+            section,
+            layer
+        );
+        anyhow::ensure!(
+            datatype >= 0,
+            "{} gds_datatype ({}) must be non-negative",
+            section,
+            datatype
+        );
         Ok(())
     }
 

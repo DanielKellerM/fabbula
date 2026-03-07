@@ -76,8 +76,7 @@ pub fn extract_channels(
 
     let thresh_val = match threshold {
         ThresholdMode::Luminance(v) => v,
-        ThresholdMode::Otsu => {
-            // Use luminance-based Otsu on the overall image
+        ThresholdMode::Otsu | ThresholdMode::Auto => {
             let gray = img.to_luma8();
             otsu_threshold_gray(&gray)
         }

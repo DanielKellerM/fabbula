@@ -99,15 +99,6 @@ fn generate_with_density_loop(
         best_rects = generate_polygons(bitmap, pdk, drc_rules, strategy, placement)?;
     }
 
-    let final_violations =
-        check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, Some(1));
-    if !final_violations.is_empty() {
-        tracing::warn!(
-            "Density loop exhausted {} retries with violations remaining",
-            max_retries
-        );
-    }
-
     Ok(best_rects)
 }
 
@@ -144,6 +135,9 @@ fn density_prepass(
 }
 
 /// Generate polygons for a single layer with optional density enforcement.
+///
+/// When `density_enforce` is true and density violations remain after the
+/// feedback loop, returns an error unless `force` is true.
 pub fn generate_layer_polygons(
     bitmap: &mut ArtworkBitmap,
     pdk: &PdkConfig,
@@ -151,10 +145,20 @@ pub fn generate_layer_polygons(
     strategy: PolygonStrategy,
     placement: PixelPlacement,
     density_enforce: bool,
+    force: bool,
 ) -> Result<Vec<Rect>> {
     if density_enforce && drc.density_max < 1.0 {
         density_prepass(bitmap, pdk, drc, placement);
-        generate_with_density_loop(bitmap, pdk, drc, strategy, placement, 3)
+        let rects = generate_with_density_loop(bitmap, pdk, drc, strategy, placement, 3)?;
+        let final_violations = check_density_only(&rects, pdk.pdk.db_units_per_um, drc, Some(1));
+        if !final_violations.is_empty() && !force {
+            anyhow::bail!(
+                "Density enforcement did not converge: {} violations remaining. \
+                 Use --force to continue despite density violations.",
+                final_violations.len()
+            );
+        }
+        Ok(rects)
     } else {
         generate_polygons(bitmap, pdk, drc, strategy, placement)
     }

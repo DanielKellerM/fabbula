@@ -126,6 +126,78 @@ impl ArtworkBitmap {
         self.metal_count() as f64 / (self.width * self.height) as f64
     }
 
+    /// Rotate the bitmap by 90, 180, or 270 degrees clockwise.
+    pub fn rotate(&mut self, degrees: u32) {
+        match degrees % 360 {
+            0 => {}
+            90 => {
+                let (w, h) = (self.width, self.height);
+                let mut out = ArtworkBitmap::new_zeroed(h, w);
+                for y in 0..h {
+                    for x in 0..w {
+                        if self.get(x, y) {
+                            out.set(h - 1 - y, x, true);
+                        }
+                    }
+                }
+                *self = out;
+            }
+            180 => {
+                let (w, h) = (self.width, self.height);
+                let mut out = ArtworkBitmap::new_zeroed(w, h);
+                for y in 0..h {
+                    for x in 0..w {
+                        if self.get(x, y) {
+                            out.set(w - 1 - x, h - 1 - y, true);
+                        }
+                    }
+                }
+                *self = out;
+            }
+            270 => {
+                let (w, h) = (self.width, self.height);
+                let mut out = ArtworkBitmap::new_zeroed(h, w);
+                for y in 0..h {
+                    for x in 0..w {
+                        if self.get(x, y) {
+                            out.set(y, w - 1 - x, true);
+                        }
+                    }
+                }
+                *self = out;
+            }
+            _ => panic!("Rotation must be 0, 90, 180, or 270 degrees"),
+        }
+    }
+
+    /// Flip the bitmap horizontally (left-right mirror).
+    pub fn flip_horizontal(&mut self) {
+        let (w, h) = (self.width, self.height);
+        let mut out = ArtworkBitmap::new_zeroed(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                if self.get(x, y) {
+                    out.set(w - 1 - x, y, true);
+                }
+            }
+        }
+        *self = out;
+    }
+
+    /// Flip the bitmap vertically (top-bottom mirror).
+    pub fn flip_vertical(&mut self) {
+        let (w, h) = (self.width, self.height);
+        let mut out = ArtworkBitmap::new_zeroed(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                if self.get(x, y) {
+                    out.set(x, h - 1 - y, true);
+                }
+            }
+        }
+        *self = out;
+    }
+
     /// Invert the bitmap (swap metal/gap)
     pub fn invert(&mut self) {
         for w in &mut self.pixels {
@@ -160,6 +232,8 @@ pub enum ThresholdMode {
     Luminance(u8),
     /// Otsu's automatic thresholding
     Otsu,
+    /// Otsu + auto-polarity (inverts if >50% pixels are metal)
+    Auto,
     /// Alpha channel: transparent = gap, opaque = metal
     Alpha(u8),
 }
@@ -169,6 +243,7 @@ impl std::fmt::Display for ThresholdMode {
         match self {
             Self::Luminance(v) => write!(f, "luminance({})", v),
             Self::Otsu => write!(f, "otsu"),
+            Self::Auto => write!(f, "auto"),
             Self::Alpha(v) => write!(f, "alpha({})", v),
         }
     }
@@ -346,7 +421,7 @@ pub fn load_artwork(
             }
             gray.pixels().map(|Luma([v])| *v < thresh).collect()
         }
-        ThresholdMode::Otsu => {
+        ThresholdMode::Otsu | ThresholdMode::Auto => {
             let mut gray = img.to_luma8();
             let thresh = otsu_threshold(&gray);
             tracing::info!("Otsu threshold: {}", thresh);
@@ -374,7 +449,22 @@ pub fn load_artwork(
         }
     };
 
-    Ok(ArtworkBitmap::from_bools(width, height, &bools))
+    let mut bitmap = ArtworkBitmap::from_bools(width, height, &bools);
+
+    // Auto-polarity: if >50% pixels are metal, the subject is likely bright
+    // on a dark background. Auto-invert so the subject becomes metal.
+    if threshold == ThresholdMode::Auto {
+        let density = bitmap.density();
+        if density > 0.5 {
+            tracing::info!(
+                "Auto-polarity: {:.1}% metal density, inverting (bright subject on dark background)",
+                density * 100.0
+            );
+            bitmap.invert();
+        }
+    }
+
+    Ok(bitmap)
 }
 
 /// Otsu's method for automatic threshold selection
@@ -1005,6 +1095,106 @@ mod tests {
                 assert_eq!(bmp3.get(x, y), !bmp.get(x, y));
             }
         }
+    }
+
+    #[test]
+    fn test_rotate_90() {
+        // 3x2 L-shape:
+        // X X .
+        // X . .
+        let bmp = ArtworkBitmap::from_bools(3, 2, &[true, true, false, true, false, false]);
+        let mut rotated = bmp.clone();
+        rotated.rotate(90);
+        // After 90° CW, becomes 2x3:
+        // X X
+        // . X
+        // . .
+        assert_eq!(rotated.width, 2);
+        assert_eq!(rotated.height, 3);
+        assert!(rotated.get(0, 0));
+        assert!(rotated.get(1, 0));
+        assert!(!rotated.get(0, 1));
+        assert!(rotated.get(1, 1));
+        assert!(!rotated.get(0, 2));
+        assert!(!rotated.get(1, 2));
+        assert_eq!(rotated.metal_count(), bmp.metal_count());
+    }
+
+    #[test]
+    fn test_rotate_180() {
+        let bmp = ArtworkBitmap::from_bools(3, 2, &[true, true, false, true, false, false]);
+        let mut rotated = bmp.clone();
+        rotated.rotate(180);
+        assert_eq!(rotated.width, 3);
+        assert_eq!(rotated.height, 2);
+        // 180° reverses all pixels
+        assert!(!rotated.get(0, 0));
+        assert!(!rotated.get(1, 0));
+        assert!(rotated.get(2, 0));
+        assert!(!rotated.get(0, 1));
+        assert!(rotated.get(1, 1));
+        assert!(rotated.get(2, 1));
+        assert_eq!(rotated.metal_count(), bmp.metal_count());
+    }
+
+    #[test]
+    fn test_rotate_270() {
+        let bmp = ArtworkBitmap::from_bools(3, 2, &[true, true, false, true, false, false]);
+        let mut rotated = bmp.clone();
+        rotated.rotate(270);
+        assert_eq!(rotated.width, 2);
+        assert_eq!(rotated.height, 3);
+        assert_eq!(rotated.metal_count(), bmp.metal_count());
+        // 270° CW = 90° CCW
+        assert!(!rotated.get(0, 0));
+        assert!(!rotated.get(1, 0));
+        assert!(rotated.get(0, 1));
+        assert!(!rotated.get(1, 1));
+        assert!(rotated.get(0, 2));
+        assert!(rotated.get(1, 2));
+    }
+
+    #[test]
+    fn test_rotate_360_noop() {
+        let bmp = ArtworkBitmap::from_bools(3, 2, &[true, true, false, true, false, false]);
+        let mut rotated = bmp.clone();
+        rotated.rotate(0);
+        for y in 0..2 {
+            for x in 0..3 {
+                assert_eq!(rotated.get(x, y), bmp.get(x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn test_flip_horizontal() {
+        let bmp = ArtworkBitmap::from_bools(3, 2, &[true, false, false, true, true, false]);
+        let mut flipped = bmp.clone();
+        flipped.flip_horizontal();
+        assert_eq!(flipped.width, 3);
+        assert_eq!(flipped.height, 2);
+        // Row 0: T F F → F F T
+        assert!(!flipped.get(0, 0));
+        assert!(!flipped.get(1, 0));
+        assert!(flipped.get(2, 0));
+        // Row 1: T T F → F T T
+        assert!(!flipped.get(0, 1));
+        assert!(flipped.get(1, 1));
+        assert!(flipped.get(2, 1));
+    }
+
+    #[test]
+    fn test_flip_vertical() {
+        let bmp = ArtworkBitmap::from_bools(3, 2, &[true, false, false, false, true, true]);
+        let mut flipped = bmp.clone();
+        flipped.flip_vertical();
+        // Rows swap: row0 becomes row1 and vice versa
+        assert!(!flipped.get(0, 0));
+        assert!(flipped.get(1, 0));
+        assert!(flipped.get(2, 0));
+        assert!(flipped.get(0, 1));
+        assert!(!flipped.get(1, 1));
+        assert!(!flipped.get(2, 1));
     }
 
     #[test]
