@@ -220,6 +220,14 @@
   - Add overflow check when computing coordinates, warn or error if exceeded
   - Files: `src/polygon.rs`, `src/pdk.rs`
 
+- [ ] **P1** Touching mode violates DRC for GF180MCU and FreePDK45
+  - In touching mode (default), gap between separate features = min_width
+  - GF180MCU: min_width=0.44 < min_spacing=0.46, so 1-pixel gaps violate spacing by 0.02um
+  - FreePDK45: merged rects exceed wide_metal_threshold=0.9, but gap=0.8 < wide_metal_spacing=0.9
+  - DRC check is opt-in (`--check-drc`), so violations are completely silent by default
+  - Fix: either validate min_width >= effective_spacing at PDK load and warn/error, or adjust pitch in touching mode to max(min_width, effective_spacing)
+  - Files: `src/polygon.rs:114-115`, `src/pdk.rs`
+
 - [ ] **P1** No end-to-end CLI tests
   - No test runs `fabbula generate` or `fabbula merge` with a real image and validates output GDS
   - Add integration tests that exercise full CLI pipeline
@@ -327,6 +335,58 @@
   - Density now uses SAT (summed area table) which was a major optimization, but isn't mentioned
   - Fix: update to mention both R-tree (spacing) and SAT (density)
   - Files: `README.md`
+
+- [ ] **P2** DRC check is opt-in, should be default
+  - `--check-drc` must be explicitly passed; default workflow produces GDS with no DRC validation
+  - Combined with touching mode bugs, users can silently produce non-DRC-clean output
+  - Fix: make DRC checking default-on with `--no-check-drc` to opt out
+  - Files: `src/main.rs:122`
+
+- [ ] **P2** K-means empty cluster not reinitialized
+  - `color.rs:294-300`: if a cluster gets zero assigned pixels, its centroid stays frozen at old position forever
+  - Can cause poor layer separation in palette mode - one layer gets stale color assignments
+  - Distinct from convergence feedback issue - this is about correctness, not logging
+  - Fix: reinitialize empty clusters to random pixel or farthest-from-centroid
+  - Files: `src/color.rs`
+
+- [ ] **P2** Min-area filtering silently removes small features
+  - `polygon.rs:155-164`: rects below min_area are filtered with no per-feature warning
+  - For ASAP7 (min_area=0.008um^2, pixel=0.04x0.04=0.0016um^2), isolated single-pixel features are silently dropped
+  - Only the final polygon count is logged; user has no visibility into what was removed
+  - Fix: log warning when min_area filtering removes >0 rects, report count and percentage
+  - Files: `src/polygon.rs`
+
+- [ ] **P2** GDS layer/datatype range not validated against GDS spec
+  - `pdk.rs`: no validation that gds_layer is in [0, 32767] or gds_datatype is in [0, 255]
+  - Custom PDK with out-of-range values would produce silently corrupted GDS binary
+  - Fix: add range checks in PdkConfig::validate() or load()
+  - Files: `src/pdk.rs`
+
+- [ ] **P2** Invalid --threshold values silently default to 128
+  - `main.rs:296-299`: non-numeric threshold strings (e.g. "foo", "999") silently fall through to Luminance(128)
+  - u8 parse of "999" fails silently; user gets unexpected threshold with no warning
+  - Fix: return error for unrecognized threshold values instead of silent fallback
+  - Files: `src/main.rs`
+
+- [ ] **P2** No unit tests for edge cases (empty image, all-white, single pixel)
+  - No tests for: 0 ON pixels after thresholding, all-white image, all-black image, 1x1 pixel bitmap
+  - Unknown whether pipeline handles these gracefully or produces empty/malformed GDS
+  - Fix: add edge case tests in polygon.rs and artwork.rs test modules
+  - Files: `src/polygon.rs`, `src/artwork.rs`
+
+- [ ] **P2** README preamble "ready to be fabricated" overpromises vs disclaimer
+  - README intro says "DRC-clean GDSII layout data - ready to be fabricated" and references "tapeout"
+  - Disclaimer section says "fabbula has not been used on a production tapeout"
+  - Users skimming the top may get false confidence; the preamble and disclaimer contradict
+  - Fix: soften intro to "designed for top-metal artwork, verify with foundry DRC tools"
+  - Files: `README.md`
+
+- [ ] **P2** SKY130 met4 alt-layer density_window_um=50 may be too small
+  - `pdks/sky130.toml:48`: met4 density window is 50um vs met5's 700um - a 14x difference
+  - Real SKY130 copper density checks typically use larger windows (200-500um)
+  - May cause artwork that passes local density but fails foundry-level density verification
+  - Fix: verify against SKY130 PDK documentation and update if needed
+  - Files: `pdks/sky130.toml`
 
 ## Completed
 
