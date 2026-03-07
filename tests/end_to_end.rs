@@ -50,7 +50,7 @@ fn generate_sky130_from_image() {
     assert!(violations.is_empty(), "DRC violations: {:?}", violations);
 
     let gds_path = dir.path().join("checkerboard_sky130.gds");
-    write_gds(&rects, &pdk, "checkerboard_art", &gds_path).unwrap();
+    write_gds(&rects, &pdk, "checkerboard_art", &gds_path, "fabbula").unwrap();
     assert!(gds_path.exists());
     assert!(
         std::fs::metadata(&gds_path).unwrap().len() > 0,
@@ -115,7 +115,7 @@ fn empty_bitmap_produces_empty_gds() {
 
     let dir = tempfile::tempdir().unwrap();
     let gds_path = dir.path().join("empty.gds");
-    write_gds(&rects, &pdk, "empty", &gds_path).unwrap();
+    write_gds(&rects, &pdk, "empty", &gds_path, "fabbula").unwrap();
     assert!(gds_path.exists());
 }
 

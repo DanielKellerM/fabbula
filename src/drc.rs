@@ -1113,4 +1113,137 @@ mod tests {
         let v = check_density_only(&[], DBU_PER_UM, &drc, None);
         assert!(v.is_empty(), "Empty rects should produce no violations");
     }
+
+    // --- Negative coordinate tests ---
+
+    #[test]
+    fn test_negative_coords_clean() {
+        let drc = basic_rules();
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        let min_s = um_to_dbu(drc.min_spacing, DBU_PER_UM);
+        let size = min_w * 2;
+        // Two rects in negative quadrant with proper spacing
+        let rects = vec![
+            Rect::new(-size, -size, Dbu(0), Dbu(0)),
+            Rect::new(min_s, -size, min_s + size, Dbu(0)),
+        ];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        let structural: Vec<_> = v
+            .iter()
+            .filter(|v| {
+                matches!(
+                    v.rule,
+                    DrcRule::MinWidth | DrcRule::MinSpacing | DrcRule::MinArea
+                )
+            })
+            .collect();
+        assert!(
+            structural.is_empty(),
+            "Negative-coordinate rects with valid spacing should pass, got: {:?}",
+            structural
+        );
+    }
+
+    #[test]
+    fn test_negative_coords_spacing_violation() {
+        let drc = basic_rules();
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        let min_s = um_to_dbu(drc.min_spacing, DBU_PER_UM);
+        let size = min_w * 2;
+        // Two rects in negative quadrant with too-small gap
+        let gap = min_s - Dbu(1);
+        let rects = vec![
+            Rect::new(-size, -size, Dbu(0), Dbu(0)),
+            Rect::new(gap, -size, gap + size, Dbu(0)),
+        ];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        assert!(
+            v.iter().any(|v| v.rule == DrcRule::MinSpacing),
+            "Negative-coordinate rects with tight spacing should violate MinSpacing"
+        );
+    }
+
+    #[test]
+    fn test_negative_coords_density() {
+        let drc = DrcRules {
+            density_max: 0.77,
+            density_window_um: 50.0,
+            ..basic_rules()
+        };
+        let window_dbu = um_to_dbu(drc.density_window_um, DBU_PER_UM);
+        // 100% fill rect centered on origin (negative to positive)
+        let half = window_dbu / 2;
+        let rects = vec![Rect::new(-half, -half, half, half)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        assert!(
+            v.iter().any(|v| v.rule == DrcRule::DensityMax),
+            "100% fill at negative coords should trigger density violation"
+        );
+    }
+
+    // --- Degenerate PDK config tests ---
+
+    #[test]
+    fn test_density_max_exactly_one() {
+        // density_max = 1.0 means no density limit - should never trigger
+        let drc = DrcRules {
+            density_max: 1.0,
+            density_window_um: 50.0,
+            ..basic_rules()
+        };
+        let window_dbu = um_to_dbu(drc.density_window_um, DBU_PER_UM);
+        let rects = vec![Rect::new(0, 0, window_dbu, window_dbu)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        assert!(
+            !v.iter().any(|v| v.rule == DrcRule::DensityMax),
+            "density_max=1.0 should never trigger density violations"
+        );
+    }
+
+    #[test]
+    fn test_equal_width_and_spacing() {
+        // min_width == min_spacing is valid and common
+        let drc = DrcRules {
+            min_width: 1.0,
+            min_spacing: 1.0,
+            ..basic_rules()
+        };
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        let size = min_w * 2;
+        let rects = vec![
+            Rect::new(0, 0, size, size),
+            Rect::new(size + min_w, 0, 2 * size + min_w, size),
+        ];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        let structural: Vec<_> = v
+            .iter()
+            .filter(|v| {
+                matches!(
+                    v.rule,
+                    DrcRule::MinWidth | DrcRule::MinSpacing | DrcRule::MinArea
+                )
+            })
+            .collect();
+        assert!(
+            structural.is_empty(),
+            "Equal width/spacing should work cleanly, got: {:?}",
+            structural
+        );
+    }
+
+    #[test]
+    fn test_large_min_area_filters_all() {
+        // min_area so large that every rect fails
+        let drc = DrcRules {
+            min_area: 1000.0, // 1000 um^2
+            ..basic_rules()
+        };
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        let rects = vec![Rect::new(0, 0, min_w, min_w)]; // 1 um^2
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        assert!(
+            v.iter().any(|v| v.rule == DrcRule::MinArea),
+            "Tiny rect should violate large min_area"
+        );
+    }
 }

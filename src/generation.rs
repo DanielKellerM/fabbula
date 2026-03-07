@@ -76,7 +76,10 @@ fn generate_with_density_loop(
                 .min(bitmap.height - py_start);
 
             if rw > 0 && rh > 0 {
-                let tight_max = drc_rules.density_max * 0.95;
+                // Target 5% below density_max to provide margin for window
+                // alignment differences between bitmap-level and polygon-level checks.
+                const DENSITY_MARGIN: f64 = 0.95;
+                let tight_max = drc_rules.density_max * DENSITY_MARGIN;
                 total_cleared +=
                     enforce_density_region(bitmap, tight_max, px_start, py_start, rw, rh);
             }
@@ -126,7 +129,7 @@ fn density_prepass(
             pitch_um
         );
     }
-    if window_px > 0 {
+    if window_px > 0 && bitmap.density() > drc.density_max {
         let cleared = enforce_density(bitmap, drc.density_max, window_px);
         if cleared > 0 {
             tracing::info!("Density enforcement: cleared {} pixels", cleared);

@@ -153,7 +153,13 @@ pub fn write_gds_multi(
 }
 
 /// Write polygons to a new GDSII file (single layer).
-pub fn write_gds(rects: &[Rect], pdk: &PdkConfig, cell_name: &str, output: &Path) -> Result<()> {
+pub fn write_gds(
+    rects: &[Rect],
+    pdk: &PdkConfig,
+    cell_name: &str,
+    output: &Path,
+    library_name: &str,
+) -> Result<()> {
     write_gds_multi(
         &[LayerRects {
             rects,
@@ -162,7 +168,7 @@ pub fn write_gds(rects: &[Rect], pdk: &PdkConfig, cell_name: &str, output: &Path
         }],
         cell_name,
         output,
-        "fabbula",
+        library_name,
         pdk.pdk.db_units_per_um,
     )
 }
@@ -1014,7 +1020,7 @@ mod tests {
         let rects = vec![Rect::new(0, 0, 1000, 1000), Rect::new(2000, 0, 3000, 500)];
 
         let tmp = NamedTempFile::with_suffix(".gds").unwrap();
-        write_gds(&rects, &pdk, "single_layer_cell", tmp.path()).unwrap();
+        write_gds(&rects, &pdk, "single_layer_cell", tmp.path(), "fabbula").unwrap();
 
         // Verify the file exists and can be loaded
         assert!(
@@ -1072,7 +1078,7 @@ mod tests {
         let rects = vec![Rect::new(0, 0, 1000, 1000)];
         let dir = tempfile::tempdir().unwrap();
         let gds_path = dir.path().join("test.gds");
-        write_gds(&rects, &pdk, "artwork", &gds_path).unwrap();
+        write_gds(&rects, &pdk, "artwork", &gds_path, "fabbula").unwrap();
 
         let result = read_existing_metal(&gds_path, &pdk, Some("nonexistent_cell"), None);
         assert!(result.is_err());
@@ -1085,7 +1091,7 @@ mod tests {
         let rects: Vec<Rect> = vec![];
         let dir = tempfile::tempdir().unwrap();
         let gds_path = dir.path().join("empty.gds");
-        write_gds(&rects, &pdk, "empty_cell", &gds_path).unwrap();
+        write_gds(&rects, &pdk, "empty_cell", &gds_path, "fabbula").unwrap();
 
         let result = read_existing_metal(&gds_path, &pdk, Some("empty_cell"), None).unwrap();
         assert!(result.is_empty());

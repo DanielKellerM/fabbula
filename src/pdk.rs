@@ -221,6 +221,34 @@ impl DrcRules {
                 self.min_spacing
             );
         }
+        // wide_metal_threshold and wide_metal_spacing must be set together
+        match (self.wide_metal_threshold, self.wide_metal_spacing) {
+            (Some(_), None) => anyhow::bail!(
+                "{} wide_metal_threshold is set but wide_metal_spacing is missing",
+                section
+            ),
+            (None, Some(_)) => anyhow::bail!(
+                "{} wide_metal_spacing is set but wide_metal_threshold is missing",
+                section
+            ),
+            _ => {}
+        }
+        if let Some(thresh) = self.wide_metal_threshold {
+            anyhow::ensure!(
+                thresh > self.min_width,
+                "{} wide_metal_threshold ({}) must be > min_width ({})",
+                section,
+                thresh,
+                self.min_width
+            );
+        }
+        if self.density_max < 1.0 {
+            anyhow::ensure!(
+                self.density_window_um > 0.0,
+                "{} density_window_um must be > 0 when density_max < 1.0",
+                section
+            );
+        }
         Ok(())
     }
 
@@ -814,5 +842,77 @@ manufacturing_grid_um = 0.005
         // snap_to_grid(1.6) = 1.6 (already on 0.005 grid)
         // So pitch should be 3.2
         assert!((pitch - 3.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_validate_wide_metal_threshold_without_spacing() {
+        let rules = DrcRules {
+            wide_metal_threshold: Some(2.0),
+            wide_metal_spacing: None,
+            ..DrcRules {
+                min_width: 1.0,
+                min_spacing: 0.5,
+                min_area: 0.0,
+                density_min: 0.0,
+                density_max: 1.0,
+                density_window_um: 500.0,
+                max_width: None,
+                wide_metal_threshold: None,
+                wide_metal_spacing: None,
+            }
+        };
+        assert!(rules.validate("test").is_err());
+    }
+
+    #[test]
+    fn test_validate_wide_metal_spacing_without_threshold() {
+        let rules = DrcRules {
+            wide_metal_threshold: None,
+            wide_metal_spacing: Some(0.6),
+            ..DrcRules {
+                min_width: 1.0,
+                min_spacing: 0.5,
+                min_area: 0.0,
+                density_min: 0.0,
+                density_max: 1.0,
+                density_window_um: 500.0,
+                max_width: None,
+                wide_metal_threshold: None,
+                wide_metal_spacing: None,
+            }
+        };
+        assert!(rules.validate("test").is_err());
+    }
+
+    #[test]
+    fn test_validate_wide_metal_threshold_below_min_width() {
+        let rules = DrcRules {
+            min_width: 1.0,
+            min_spacing: 0.5,
+            min_area: 0.0,
+            density_min: 0.0,
+            density_max: 1.0,
+            density_window_um: 500.0,
+            max_width: None,
+            wide_metal_threshold: Some(0.5), // below min_width
+            wide_metal_spacing: Some(0.8),
+        };
+        assert!(rules.validate("test").is_err());
+    }
+
+    #[test]
+    fn test_validate_density_window_zero_with_density_limit() {
+        let rules = DrcRules {
+            min_width: 1.0,
+            min_spacing: 0.5,
+            min_area: 0.0,
+            density_min: 0.0,
+            density_max: 0.7,
+            density_window_um: 0.0, // invalid when density_max < 1.0
+            max_width: None,
+            wide_metal_threshold: None,
+            wide_metal_spacing: None,
+        };
+        assert!(rules.validate("test").is_err());
     }
 }

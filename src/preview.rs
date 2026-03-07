@@ -32,6 +32,13 @@ pub fn write_svg_multi(
     background: Option<&str>,
 ) -> Result<()> {
     let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
+    if all_rects.len() > 50_000 {
+        tracing::warn!(
+            "SVG output contains {} rectangles and may be very large. \
+             Consider using --html with --deep-zoom for large designs.",
+            all_rects.len()
+        );
+    }
     let bb = bounding_box_refs(&all_rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
 
     let margin = (bb.width().max(bb.height()).0 as f64 * 0.02) as i32;

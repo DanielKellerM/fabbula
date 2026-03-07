@@ -35,7 +35,7 @@
 //! let rects = generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, PixelPlacement::Separated).unwrap();
 //! let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
 //! report_drc(&violations);
-//! write_gds(&rects, &pdk, "artwork", Path::new("output.gds")).unwrap();
+//! write_gds(&rects, &pdk, "artwork", Path::new("output.gds"), "fabbula").unwrap();
 //! ```
 //!
 //! # Modules

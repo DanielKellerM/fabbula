@@ -186,10 +186,16 @@ Rules **not** checked (not applicable to floating top-metal artwork):
 - Same-net spacing (artwork is electrically isolated)
 - Via density, metal-to-via spacing
 
-### After generation
+### Tapeout checklist
 
-- Re-run foundry DRC after dummy fill insertion (the foundry's fill tool adds metal around your artwork)
-- Verify the artwork layer matches your PDK's top metal assignment
+After generating artwork with fabbula, verify the following before tapeout:
+
+1. **Run your foundry's full DRC deck** - fabbula's built-in checks cover width, spacing, area, and density, but the foundry deck is authoritative
+2. **Check antenna rules** - floating top-metal artwork shouldn't trigger antenna violations, but some DRC decks flag large floating structures. Add an antenna waiver if needed
+3. **Verify density after dummy fill** - the foundry's fill tool inserts metal around your artwork. Re-run DRC after fill to confirm overall density compliance
+4. **Confirm layer mapping** - verify the GDS layer/datatype in fabbula's output matches your PDK's top metal assignment
+5. **Check exclusion zones** - ensure artwork doesn't overlap bond pads, ESD rings, seal rings, or power straps. Use `--exclusion-margin` during merge
+6. **Inspect the preview** - use `--svg` or `--html` to visually verify the artwork before committing to your layout
 
 ### PDK rule confidence
 
