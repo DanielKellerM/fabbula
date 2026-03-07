@@ -1,5 +1,9 @@
 # GF180MCU PDK Configuration for fabbula
 # GlobalFoundries 180nm, variant D (5-metal, 1.1µm thick top metal)
+#
+# Sources:
+#   https://github.com/google/gf180mcu-pdk
+#   GF180MCU Design Rule Manual (DRM), sections 14.6.x (Metal5 rules)
 
 [pdk]
 name = "gf180mcu"
@@ -23,8 +27,9 @@ gds_datatype = 0
 [drc]
 min_width = 0.44
 min_spacing = 0.46
-min_area = 0.0
+min_area = 0.0            # Not specified for Metal5 in DRM; 0 = conservative (no minimum)
 min_enclosed_area = 0.0
+max_width = 30.0          # DRM 14.6.3: metal slotting required above 30 um
 density_min = 0.0
 density_max = 0.80
 density_window_um = 500.0

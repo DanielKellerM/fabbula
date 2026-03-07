@@ -142,6 +142,46 @@ Square format, 1024x1024.
 
 **Styles to avoid:** photorealistic, watercolor, pencil sketch, anything with gradients or soft edges.
 
+## Tapeout Integration
+
+Chip artwork lives on the top metal layer as electrically floating metal with no vias to lower layers. This simplifies integration compared to active routing:
+
+- **No via rules apply** - fabbula only generates metal shapes, never vias
+- **Antenna rules typically don't apply** - floating metal has no conductive path to gate oxide. Some foundry DRC decks may still flag large floating structures; check your specific rule deck
+- **Width, spacing, and density rules still apply** - fabbula enforces all of these by construction (min width, min spacing, max width/slotting, density limits)
+- **Top metal may have existing structures** - power grids, bond pads, and ESD rings share the top metal layer. Use `--exclusion-margin` to keep artwork clear of them
+
+### Merge workflow
+
+Use the `merge` subcommand to place artwork into your chip GDS. The `--exclusion-margin` flag keeps artwork away from existing metal (power grid, ESD ring, bond pads):
+
+```bash
+fabbula merge -i logo.png --chip my_chip.gds -o my_chip_art.gds \
+    -p sky130 --exclusion-margin 20.0
+```
+
+To exclude metal on a different layer (e.g. power straps), use `--exclusion-layer`:
+
+```bash
+fabbula merge -i logo.png --chip my_chip.gds -o my_chip_art.gds \
+    -p sky130 --exclusion-margin 20.0 --exclusion-layer 71/20
+```
+
+### After generation
+
+- Re-run foundry DRC after dummy fill insertion (the foundry's fill tool adds metal around your artwork)
+- Verify the artwork layer matches your PDK's top metal assignment
+
+### PDK rule confidence
+
+| PDK | Rules verified against | Confidence |
+|-----|----------------------|------------|
+| SKY130 | Official periphery rules docs | High |
+| GF180MCU | Design Rule Manual (DRM 14.6.x) | High |
+| IHP SG13G2 | SG13G2_os_layout_rules.pdf | Medium |
+| FreePDK45 | NCSU/mflowgen repos (virtual PDK) | High |
+| ASAP7 | ASAP7 LEF/tech files (virtual PDK) | High |
+
 ## Inspiration / Comparison
 
 fabbula was born from a simple idea: reimplement image-to-GDSII artwork generation in Rust - as a single, self-contained binary with zero runtime dependencies. The chip art community has produced excellent work over the years, and fabbula builds on that foundation.
@@ -214,12 +254,12 @@ Full DRC check (min width, max width, min spacing, wide-metal spacing, min area,
 - [x] GDSII read/write/merge
 - [x] Built-in DRC validation
 - [x] SVG preview output
+- [x] SVG input support (via resvg rasterization)
 - [ ] Built-in vtracer vectorization (PNG → SVG → GDS in one binary)
-- [ ] usvg-based SVG path import (hand-drawn vector art)
 - [x] Exclusion zones (avoid existing top-metal structures)
 - [ ] Density-aware artwork generation
 - [x] LEF output for OpenLane/OpenROAD integration
-- [ ] Grayscale dithering for multi-density artwork
+- [x] Floyd-Steinberg dithering for gradient artwork
 - [ ] OASIS output support
 - [ ] WASM build for browser-based preview
 

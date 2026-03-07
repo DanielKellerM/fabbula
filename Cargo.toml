@@ -44,6 +44,9 @@ rstar = "0.12"
 # Gzip decompression for compressed GDS files
 flate2 = "1"
 
+# SVG rasterization (pure Rust)
+resvg = "0.45"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

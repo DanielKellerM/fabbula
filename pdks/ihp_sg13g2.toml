@@ -1,5 +1,9 @@
 # IHP SG13G2 PDK Configuration for fabbula
 # IHP 130nm BiCMOS, 5 thin + 2 thick metal layers (7 total)
+#
+# Sources:
+#   https://github.com/IHP-GmbH/IHP-Open-PDK
+#   SG13G2_os_layout_rules.pdf (in IHP-Open-PDK/ihp-sg13g2/libs.doc/doc/)
 
 [pdk]
 name = "ihp_sg13g2"
@@ -24,7 +28,7 @@ gds_datatype = 0
 [drc]
 min_width = 1.8
 min_spacing = 1.8
-min_area = 0.0            # check actual PDK rules
+min_area = 0.0            # Not specified in SG13G2_os_layout_rules.pdf; 0 = conservative (no minimum)
 min_enclosed_area = 0.0
 density_min = 0.0
 density_max = 0.80

@@ -57,6 +57,14 @@
   - Results: enforce_density -25% to -26%, exclusion mask ~500ns for 512x512
   - Files: `src/artwork.rs`, `profiling/bench_artwork.rs`
 
+- [x] **P1** Competitive audit fixes (round 2)
+  - PDK TOML fixes: added source citations to IHP/GF180, GF180 max_width=30.0 slotting rule
+  - README: tapeout integration section (safety, merge workflow, PDK confidence)
+  - `--exclusion-layer LAYER/DATATYPE` flag for merge command (custom exclusion layer)
+  - `--dither` flag: Floyd-Steinberg dithering for gradient artwork
+  - SVG input support via resvg (auto-detected by .svg extension)
+  - Files: pdks/*.toml, README.md, src/main.rs, src/artwork.rs, src/color.rs, src/gdsio.rs, Cargo.toml
+
 ## Features
 
 - [ ] **P2** Smart auto-polarity and threshold improvements

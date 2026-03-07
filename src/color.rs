@@ -10,7 +10,7 @@
 
 use crate::artwork::{ArtworkBitmap, ThresholdMode};
 use crate::pdk::ArtworkLayerProfile;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::Path;
 
 /// Color extraction mode for multi-layer artwork
@@ -28,14 +28,24 @@ pub struct LayerBitmap {
     pub layer_index: usize,
 }
 
-/// Load image and open it with optional resize, returning the DynamicImage.
+/// Load image (raster or SVG) and open it with optional resize, returning the DynamicImage.
 fn load_image(path: &Path, max_pixels: Option<(u32, u32)>) -> Result<image::DynamicImage> {
-    let img =
-        image::open(path).with_context(|| format!("Failed to open image: {}", path.display()))?;
-    let img = if let Some((max_w, max_h)) = max_pixels {
-        let (w, h) = image::GenericImageView::dimensions(&img);
-        if w > max_w || h > max_h {
-            img.resize(max_w, max_h, image::imageops::FilterType::Lanczos3)
+    let img = crate::artwork::load_image_file(
+        path,
+        if crate::artwork::is_svg(path) {
+            max_pixels
+        } else {
+            None
+        },
+    )?;
+    let img = if !crate::artwork::is_svg(path) {
+        if let Some((max_w, max_h)) = max_pixels {
+            let (w, h) = image::GenericImageView::dimensions(&img);
+            if w > max_w || h > max_h {
+                img.resize(max_w, max_h, image::imageops::FilterType::Lanczos3)
+            } else {
+                img
+            }
         } else {
             img
         }

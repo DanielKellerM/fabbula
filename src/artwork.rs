@@ -10,7 +10,7 @@
 
 use crate::pdk::PdkConfig;
 use anyhow::{Context, Result};
-use image::{GenericImageView, Luma};
+use image::{DynamicImage, GenericImageView, Luma};
 use std::path::Path;
 
 /// A binary bitmap where true = metal, false = gap.
@@ -148,30 +148,150 @@ pub enum ThresholdMode {
     Alpha(u8),
 }
 
+/// Check if a file path has an SVG extension.
+pub fn is_svg(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"))
+        .unwrap_or(false)
+}
+
+/// Rasterize an SVG file to a `DynamicImage`, fitting within `target_size` if provided.
+pub fn rasterize_svg(path: &Path, target_size: Option<(u32, u32)>) -> Result<DynamicImage> {
+    let svg_data =
+        std::fs::read(path).with_context(|| format!("Failed to read SVG: {}", path.display()))?;
+
+    let tree = resvg::usvg::Tree::from_data(&svg_data, &resvg::usvg::Options::default())
+        .with_context(|| format!("Failed to parse SVG: {}", path.display()))?;
+
+    let svg_size = tree.size();
+    let svg_w = svg_size.width();
+    let svg_h = svg_size.height();
+
+    let (px_w, px_h) = if let Some((tw, th)) = target_size {
+        let sx = tw as f32 / svg_w;
+        let sy = th as f32 / svg_h;
+        let scale = sx.min(sy);
+        ((svg_w * scale).ceil() as u32, (svg_h * scale).ceil() as u32)
+    } else {
+        (svg_w.ceil() as u32, svg_h.ceil() as u32)
+    };
+
+    anyhow::ensure!(px_w > 0 && px_h > 0, "SVG rasterizes to zero dimensions");
+
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(px_w, px_h)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap {}x{}", px_w, px_h))?;
+
+    let scale_x = px_w as f32 / svg_w;
+    let scale_y = px_h as f32 / svg_h;
+    let transform = resvg::tiny_skia::Transform::from_scale(scale_x, scale_y);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    // Convert from premultiplied RGBA to straight RGBA
+    let pixels = pixmap.data_mut();
+    for chunk in pixels.chunks_exact_mut(4) {
+        let a = chunk[3] as f32 / 255.0;
+        if a > 0.0 && a < 1.0 {
+            chunk[0] = (chunk[0] as f32 / a).min(255.0) as u8;
+            chunk[1] = (chunk[1] as f32 / a).min(255.0) as u8;
+            chunk[2] = (chunk[2] as f32 / a).min(255.0) as u8;
+        }
+    }
+
+    let rgba_img = image::RgbaImage::from_raw(px_w, px_h, pixels.to_vec())
+        .ok_or_else(|| anyhow::anyhow!("Failed to create RGBA image from SVG pixmap"))?;
+
+    tracing::info!(
+        "Rasterized SVG {:.0}x{:.0} -> {}x{} px",
+        svg_w,
+        svg_h,
+        px_w,
+        px_h
+    );
+    Ok(DynamicImage::ImageRgba8(rgba_img))
+}
+
+/// Apply Floyd-Steinberg dithering to a grayscale image buffer.
+///
+/// Uses an f32 error buffer to avoid u8 clamping artifacts. The standard FS kernel
+/// distributes quantization error: 7/16 right, 3/16 bottom-left, 5/16 bottom, 1/16 bottom-right.
+pub fn floyd_steinberg_dither(gray: &mut image::GrayImage, threshold: u8) {
+    let w = gray.width() as usize;
+    let h = gray.height() as usize;
+
+    let mut buf: Vec<f32> = gray.as_raw().iter().map(|&v| v as f32).collect();
+
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            let old = buf[idx];
+            let new = if old < threshold as f32 { 0.0 } else { 255.0 };
+            buf[idx] = new;
+            let err = old - new;
+
+            if x + 1 < w {
+                buf[idx + 1] += err * 7.0 / 16.0;
+            }
+            if y + 1 < h {
+                if x > 0 {
+                    buf[(y + 1) * w + x - 1] += err * 3.0 / 16.0;
+                }
+                buf[(y + 1) * w + x] += err * 5.0 / 16.0;
+                if x + 1 < w {
+                    buf[(y + 1) * w + x + 1] += err * 1.0 / 16.0;
+                }
+            }
+        }
+    }
+
+    let raw = gray.as_mut();
+    for (px, &val) in raw.iter_mut().zip(buf.iter()) {
+        *px = val.clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// Load an image file (raster or SVG) and open it, returning a DynamicImage.
+pub fn load_image_file(path: &Path, max_pixels: Option<(u32, u32)>) -> Result<DynamicImage> {
+    let img = if is_svg(path) {
+        rasterize_svg(path, max_pixels)?
+    } else {
+        image::open(path).with_context(|| format!("Failed to open image: {}", path.display()))?
+    };
+    Ok(img)
+}
+
 /// Load an image file and convert to a binary artwork bitmap.
 ///
 /// If `max_pixels` is set, the image is downscaled so that the
 /// total pixel count for the artwork doesn't exceed it (useful for
 /// keeping GDSII file sizes reasonable).
+///
+/// If `dither` is true, Floyd-Steinberg dithering is applied before
+/// thresholding, producing dot patterns for gradients instead of hard edges.
 pub fn load_artwork(
     path: &Path,
     threshold: ThresholdMode,
     max_pixels: Option<(u32, u32)>,
+    dither: bool,
 ) -> Result<ArtworkBitmap> {
-    let img =
-        image::open(path).with_context(|| format!("Failed to open image: {}", path.display()))?;
+    let img = load_image_file(path, if is_svg(path) { max_pixels } else { None })?;
 
-    let img = if let Some((max_w, max_h)) = max_pixels {
-        let (w, h) = img.dimensions();
-        if w > max_w || h > max_h {
-            tracing::info!(
-                "Resizing image from {}x{} to fit within {}x{}",
-                w,
-                h,
-                max_w,
-                max_h
-            );
-            img.resize(max_w, max_h, image::imageops::FilterType::Lanczos3)
+    // For non-SVG images, apply resize after loading
+    let img = if !is_svg(path) {
+        if let Some((max_w, max_h)) = max_pixels {
+            let (w, h) = img.dimensions();
+            if w > max_w || h > max_h {
+                tracing::info!(
+                    "Resizing image from {}x{} to fit within {}x{}",
+                    w,
+                    h,
+                    max_w,
+                    max_h
+                );
+                img.resize(max_w, max_h, image::imageops::FilterType::Lanczos3)
+            } else {
+                img
+            }
         } else {
             img
         }
@@ -184,20 +304,37 @@ pub fn load_artwork(
 
     let bools: Vec<bool> = match threshold {
         ThresholdMode::Luminance(thresh) => {
-            let gray = img.to_luma8();
+            let mut gray = img.to_luma8();
+            if dither {
+                floyd_steinberg_dither(&mut gray, thresh);
+            }
             gray.pixels().map(|Luma([v])| *v < thresh).collect()
         }
         ThresholdMode::Otsu => {
-            let gray = img.to_luma8();
+            let mut gray = img.to_luma8();
             let thresh = otsu_threshold(&gray);
             tracing::info!("Otsu threshold: {}", thresh);
+            if dither {
+                floyd_steinberg_dither(&mut gray, thresh);
+            }
             gray.pixels().map(|Luma([v])| *v < thresh).collect()
         }
         ThresholdMode::Alpha(thresh) => {
-            let rgba = img.to_rgba8();
-            rgba.pixels()
-                .map(|p| p[3] >= thresh) // alpha >= threshold = metal
-                .collect()
+            if dither {
+                // Dither the alpha channel
+                let rgba = img.to_rgba8();
+                let mut alpha_gray = image::GrayImage::from_raw(
+                    width,
+                    height,
+                    rgba.pixels().map(|p| p[3]).collect(),
+                )
+                .expect("alpha buffer size matches");
+                floyd_steinberg_dither(&mut alpha_gray, thresh);
+                alpha_gray.pixels().map(|Luma([v])| *v >= thresh).collect()
+            } else {
+                let rgba = img.to_rgba8();
+                rgba.pixels().map(|p| p[3] >= thresh).collect()
+            }
         }
     };
 
@@ -1059,5 +1196,86 @@ mod tests {
             "Otsu threshold {} should be between 30 and 220",
             thresh
         );
+    }
+
+    #[test]
+    fn test_floyd_steinberg_gradient_density() {
+        // A gradient image should dither to roughly 50% density
+        let mut gray = image::GrayImage::new(100, 100);
+        for y in 0..100 {
+            for x in 0..100 {
+                let v = ((x as f32 / 99.0) * 255.0) as u8;
+                gray.put_pixel(x, y, Luma([v]));
+            }
+        }
+        floyd_steinberg_dither(&mut gray, 128);
+        let on: usize = gray.pixels().filter(|Luma([v])| *v < 128).count();
+        let density = on as f64 / 10000.0;
+        assert!(
+            (0.35..0.65).contains(&density),
+            "Gradient dither density {:.2} should be near 50%",
+            density
+        );
+    }
+
+    #[test]
+    fn test_floyd_steinberg_preserves_extremes() {
+        // Pure black stays black, pure white stays white
+        let mut black = image::GrayImage::from_pixel(10, 10, Luma([0]));
+        floyd_steinberg_dither(&mut black, 128);
+        assert!(black.pixels().all(|Luma([v])| *v == 0));
+
+        let mut white = image::GrayImage::from_pixel(10, 10, Luma([255]));
+        floyd_steinberg_dither(&mut white, 128);
+        assert!(white.pixels().all(|Luma([v])| *v == 255));
+    }
+
+    #[test]
+    fn test_is_svg() {
+        assert!(is_svg(Path::new("logo.svg")));
+        assert!(is_svg(Path::new("logo.SVG")));
+        assert!(is_svg(Path::new("logo.svgz")));
+        assert!(!is_svg(Path::new("logo.png")));
+        assert!(!is_svg(Path::new("logo.jpg")));
+    }
+
+    #[test]
+    fn test_rasterize_svg_simple() {
+        // Create a simple SVG with a black rectangle
+        let svg_content = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+            <rect x="0" y="0" width="100" height="100" fill="black"/>
+        </svg>"#;
+        let tmp = tempfile::NamedTempFile::with_suffix(".svg").unwrap();
+        std::fs::write(tmp.path(), svg_content).unwrap();
+
+        let img = rasterize_svg(tmp.path(), None).unwrap();
+        let (w, h) = img.dimensions();
+        assert_eq!(w, 100);
+        assert_eq!(h, 100);
+
+        // Check that pixels are dark (black rect)
+        let gray = img.to_luma8();
+        let avg: f64 = gray.pixels().map(|Luma([v])| *v as f64).sum::<f64>() / (w * h) as f64;
+        assert!(
+            avg < 10.0,
+            "Black SVG should produce dark pixels, got avg {}",
+            avg
+        );
+    }
+
+    #[test]
+    fn test_rasterize_svg_with_resize() {
+        let svg_content = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+            <rect x="0" y="0" width="200" height="100" fill="red"/>
+        </svg>"#;
+        let tmp = tempfile::NamedTempFile::with_suffix(".svg").unwrap();
+        std::fs::write(tmp.path(), svg_content).unwrap();
+
+        let img = rasterize_svg(tmp.path(), Some((50, 50))).unwrap();
+        let (w, h) = img.dimensions();
+        // Should fit within 50x50, preserving 2:1 aspect ratio
+        assert!(w <= 50 && h <= 50);
+        assert_eq!(w, 50); // Width-limited
+        assert_eq!(h, 25); // Half height due to aspect ratio
     }
 }

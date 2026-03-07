@@ -123,6 +123,10 @@ enum Commands {
         #[arg(long)]
         no_density_enforce: bool,
 
+        /// Apply Floyd-Steinberg dithering (improves gradients at chip scale)
+        #[arg(long)]
+        dither: bool,
+
         /// Color extraction mode for multi-layer output
         #[arg(long, default_value = "single", value_enum)]
         color_mode: ColorModeArg,
@@ -193,6 +197,14 @@ enum Commands {
         /// Exclusion margin in um - clear artwork pixels near existing metal
         #[arg(long)]
         exclusion_margin: Option<f64>,
+
+        /// GDS layer/datatype for exclusion (e.g. "81/0"). Defaults to PDK artwork layer.
+        #[arg(long)]
+        exclusion_layer: Option<String>,
+
+        /// Apply Floyd-Steinberg dithering (improves gradients at chip scale)
+        #[arg(long)]
+        dither: bool,
 
         /// Disable automatic density enforcement
         #[arg(long)]
@@ -325,6 +337,7 @@ fn prepare_bitmap(
     max_width: Option<u32>,
     max_height: Option<u32>,
     invert: bool,
+    dither: bool,
 ) -> Result<ArtworkBitmap> {
     let thresh = parse_threshold(threshold);
     let max_px = match (max_width, max_height) {
@@ -333,11 +346,27 @@ fn prepare_bitmap(
         (None, Some(h)) => Some((h, h)),
         (None, None) => None,
     };
-    let mut bitmap = load_artwork(input, thresh, max_px)?;
+    let mut bitmap = load_artwork(input, thresh, max_px, dither)?;
     if invert {
         bitmap.invert();
     }
     Ok(bitmap)
+}
+
+/// Parse a "LAYER/DATATYPE" string into (i16, i16).
+fn parse_layer_spec(s: &str) -> Result<(i16, i16)> {
+    let parts: Vec<&str> = s.split('/').collect();
+    anyhow::ensure!(
+        parts.len() == 2,
+        "exclusion-layer must be in LAYER/DATATYPE format (e.g. 81/0)"
+    );
+    let layer: i16 = parts[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid layer number in exclusion-layer"))?;
+    let datatype: i16 = parts[1]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid datatype in exclusion-layer"))?;
+    Ok((layer, datatype))
 }
 
 /// Generate polygons with a closed-loop density enforcement.
@@ -525,6 +554,7 @@ fn main() -> Result<()> {
             lef,
             check_drc: do_drc,
             no_density_enforce,
+            dither,
             color_mode,
             num_colors,
         } => {
@@ -561,7 +591,7 @@ fn main() -> Result<()> {
             match color_mode {
                 ColorModeArg::Single => {
                     let mut bitmap =
-                        prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
+                        prepare_bitmap(&input, &threshold, max_width, max_height, invert, dither)?;
                     tracing::info!(
                         "Bitmap: {}x{}, density: {:.1}%",
                         bitmap.width,
@@ -711,6 +741,8 @@ fn main() -> Result<()> {
             size_um,
             invert,
             exclusion_margin,
+            exclusion_layer,
+            dither,
             no_density_enforce,
             color_mode,
             num_colors,
@@ -744,8 +776,13 @@ fn main() -> Result<()> {
             let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
 
             // Read existing metal once for exclusion (shared across all color modes)
+            let exclusion_override = exclusion_layer
+                .as_deref()
+                .map(parse_layer_spec)
+                .transpose()?;
             let exclusion_metal = if exclusion_margin.is_some() {
-                let existing = read_existing_metal(&chip, &pdk, cell.as_deref())?;
+                let existing =
+                    read_existing_metal(&chip, &pdk, cell.as_deref(), exclusion_override)?;
                 if existing.is_empty() {
                     None
                 } else {
@@ -758,7 +795,7 @@ fn main() -> Result<()> {
             match color_mode {
                 ColorModeArg::Single => {
                     let mut bitmap =
-                        prepare_bitmap(&input, &threshold, max_width, max_height, invert)?;
+                        prepare_bitmap(&input, &threshold, max_width, max_height, invert, dither)?;
 
                     if let (Some(margin_um), Some(existing)) = (exclusion_margin, &exclusion_metal)
                     {
@@ -909,6 +946,9 @@ fn main() -> Result<()> {
             println!("  Min width:   {} µm", config.drc.min_width);
             println!("  Min spacing: {} µm", config.drc.min_spacing);
             println!("  Min area:    {} µm²", config.drc.min_area);
+            if let Some(max_w) = config.drc.max_width {
+                println!("  Max width:   {} µm (slotting)", max_w);
+            }
             println!("  Max density: {:.0}%", config.drc.density_max * 100.0);
             println!();
             println!("Grid: {} µm", config.grid.manufacturing_grid_um);

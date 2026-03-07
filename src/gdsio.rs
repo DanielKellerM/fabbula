@@ -451,10 +451,15 @@ fn flatten_cell(
 
 /// Read existing polygons on the artwork layer from a GDS file.
 /// Flattens the cell hierarchy (SREFs/AREFs) to capture all geometry.
+///
+/// If `override_layer` is provided, reads from that (layer, datatype) pair
+/// instead of the PDK's default artwork layer. This lets users exclude metal
+/// from other layers (e.g. power straps on a different metal).
 pub fn read_existing_metal(
     gds_path: &Path,
     pdk: &PdkConfig,
     cell_name: Option<&str>,
+    override_layer: Option<(i16, i16)>,
 ) -> Result<Vec<Rect>> {
     let lib = load_gds(gds_path)?;
 
@@ -473,8 +478,8 @@ pub fn read_existing_metal(
             .ok_or_else(|| anyhow::anyhow!("No cells in GDS"))?
     };
 
-    let layer = pdk.artwork_layer.gds_layer;
-    let datatype = pdk.artwork_layer.gds_datatype;
+    let (layer, datatype) =
+        override_layer.unwrap_or((pdk.artwork_layer.gds_layer, pdk.artwork_layer.gds_datatype));
 
     // Build cell lookup map for hierarchy traversal
     let cell_map: HashMap<&str, &GdsStruct> =
@@ -565,7 +570,7 @@ mod tests {
         lib.structs.push(top);
         let f = save_lib(&lib);
 
-        let rects = read_existing_metal(f.path(), &pdk, Some("top")).unwrap();
+        let rects = read_existing_metal(f.path(), &pdk, Some("top"), None).unwrap();
         assert_eq!(rects.len(), 1);
         assert_eq!(rects[0], Rect::new(1000, 2000, 1100, 2100));
     }
@@ -597,7 +602,7 @@ mod tests {
         lib.structs.push(cell);
         let f = save_lib(&lib);
 
-        let rects = read_existing_metal(f.path(), &pdk, Some("top")).unwrap();
+        let rects = read_existing_metal(f.path(), &pdk, Some("top"), None).unwrap();
         assert_eq!(rects.len(), 1);
         // Bounding box should encompass the whole L-shape
         assert_eq!(rects[0], Rect::new(0, 0, 200, 200));
@@ -622,7 +627,7 @@ mod tests {
         lib.structs.push(cell);
         let f = save_lib(&lib);
 
-        let rects = read_existing_metal(f.path(), &pdk, Some("top")).unwrap();
+        let rects = read_existing_metal(f.path(), &pdk, Some("top"), None).unwrap();
         assert_eq!(rects.len(), 1);
         // half_w = 20, so bbox: (80, 80) to (320, 120)
         assert_eq!(rects[0], Rect::new(80, 80, 320, 120));
@@ -658,7 +663,7 @@ mod tests {
         lib.structs.push(top);
         let f = save_lib(&lib);
 
-        let rects = read_existing_metal(f.path(), &pdk, Some("top")).unwrap();
+        let rects = read_existing_metal(f.path(), &pdk, Some("top"), None).unwrap();
         assert_eq!(rects.len(), 4);
 
         // Sort for deterministic comparison
@@ -691,7 +696,7 @@ mod tests {
         let f = save_lib(&lib);
 
         // Should not panic or infinite-loop; just hits depth limit
-        let rects = read_existing_metal(f.path(), &pdk, Some("loop_cell")).unwrap();
+        let rects = read_existing_metal(f.path(), &pdk, Some("loop_cell"), None).unwrap();
         // We get one rect per recursion level up to MAX_HIERARCHY_DEPTH
         assert_eq!(rects.len(), MAX_HIERARCHY_DEPTH);
     }
@@ -726,7 +731,7 @@ mod tests {
         lib.structs.push(top);
         let f = save_lib(&lib);
 
-        let rects = read_existing_metal(f.path(), &pdk, Some("top")).unwrap();
+        let rects = read_existing_metal(f.path(), &pdk, Some("top"), None).unwrap();
         assert_eq!(rects.len(), 1);
         // 90-degree CCW rotation: (x,y) -> (-y,x)
         // Original corners: (0,0),(100,0),(100,50),(0,50)

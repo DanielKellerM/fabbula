@@ -31,7 +31,7 @@
 //! use std::path::Path;
 //!
 //! let pdk = PdkConfig::builtin("sky130").unwrap();
-//! let bitmap = load_artwork(Path::new("logo.png"), ThresholdMode::Otsu, None).unwrap();
+//! let bitmap = load_artwork(Path::new("logo.png"), ThresholdMode::Otsu, None, false).unwrap();
 //! let rects = generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false).unwrap();
 //! let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
 //! report_drc(&violations);
