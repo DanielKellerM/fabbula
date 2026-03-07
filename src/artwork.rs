@@ -145,6 +145,7 @@ impl ArtworkBitmap {
 
 /// How to interpret the image for thresholding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ThresholdMode {
     /// Simple luminance threshold: below = metal, above = gap
     Luminance(u8),
@@ -152,6 +153,16 @@ pub enum ThresholdMode {
     Otsu,
     /// Alpha channel: transparent = gap, opaque = metal
     Alpha(u8),
+}
+
+impl std::fmt::Display for ThresholdMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Luminance(v) => write!(f, "luminance({})", v),
+            Self::Otsu => write!(f, "otsu"),
+            Self::Alpha(v) => write!(f, "alpha({})", v),
+        }
+    }
 }
 
 /// Check if a file path has an SVG extension.
@@ -274,6 +285,7 @@ pub fn load_image_file(path: &Path, max_pixels: Option<(u32, u32)>) -> Result<Dy
 ///
 /// If `dither` is true, Floyd-Steinberg dithering is applied before
 /// thresholding, producing dot patterns for gradients instead of hard edges.
+#[must_use = "loaded artwork bitmap should be used for polygon generation"]
 pub fn load_artwork(
     path: &Path,
     threshold: ThresholdMode,

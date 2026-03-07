@@ -16,6 +16,7 @@ const PARALLEL_RECT_THRESHOLD: usize = 5_000;
 
 /// DRC rule categories
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DrcRule {
     MinWidth,
     MaxWidth,
@@ -168,11 +169,13 @@ fn rect_spacing(a: &Rect, b: &Rect) -> i32 {
 /// 4. Wide-metal spacing (Cu layers)
 /// 5. Minimum area
 /// 6. Metal density (SAT-accelerated window-based)
+#[must_use = "DRC violations should be checked or reported"]
 pub fn check_drc(rects: &[Rect], db_units_per_um: u32, drc: &DrcRules) -> Vec<DrcViolation> {
     check_drc_capped(rects, db_units_per_um, drc, None)
 }
 
 /// Like `check_drc` but stops after `max_violations` are found.
+#[must_use = "DRC violations should be checked or reported"]
 pub fn check_drc_capped(
     rects: &[Rect],
     db_units_per_um: u32,
@@ -589,6 +592,7 @@ fn check_density(
 
 /// Check only density rules (skip width/spacing/area).
 /// Much faster than full DRC - used in the density feedback loop.
+#[must_use = "DRC violations should be checked or reported"]
 pub fn check_density_only(
     rects: &[Rect],
     db_units_per_um: u32,
@@ -869,5 +873,231 @@ mod tests {
             "50% fill should pass 77% density limit, got {:?}",
             v
         );
+    }
+
+    // --- Boundary condition tests (P1) ---
+
+    #[test]
+    fn test_width_exactly_at_min() {
+        let drc = basic_rules();
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        // Rect exactly at min_width should pass
+        let rects = vec![Rect::new(0, 0, min_w, min_w)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        let width_violations: Vec<_> = v.iter().filter(|v| v.rule == DrcRule::MinWidth).collect();
+        assert!(
+            width_violations.is_empty(),
+            "Rect at exactly min_width should pass, got: {:?}",
+            width_violations
+        );
+    }
+
+    #[test]
+    fn test_width_one_below_min() {
+        let drc = basic_rules();
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        // Rect one dbu below min_width should fail
+        let rects = vec![Rect::new(0, 0, min_w - 1, min_w)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        assert!(
+            v.iter().any(|v| v.rule == DrcRule::MinWidth),
+            "Rect at min_width-1 should violate MinWidth"
+        );
+    }
+
+    #[test]
+    fn test_spacing_exactly_at_min() {
+        let drc = basic_rules();
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        let min_s = um_to_dbu(drc.min_spacing, DBU_PER_UM);
+        let size = min_w * 2; // big enough for min_area
+        // Two rects spaced exactly at min_spacing should pass
+        let rects = vec![
+            Rect::new(0, 0, size, size),
+            Rect::new(size + min_s, 0, 2 * size + min_s, size),
+        ];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        let spacing_violations: Vec<_> = v
+            .iter()
+            .filter(|v| matches!(v.rule, DrcRule::MinSpacing | DrcRule::WideMetalSpacing))
+            .collect();
+        assert!(
+            spacing_violations.is_empty(),
+            "Rects at exactly min_spacing should pass, got: {:?}",
+            spacing_violations
+        );
+    }
+
+    #[test]
+    fn test_spacing_one_below_min() {
+        let drc = basic_rules();
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        let min_s = um_to_dbu(drc.min_spacing, DBU_PER_UM);
+        let size = min_w * 2;
+        // Two rects spaced one dbu below min_spacing should fail
+        let rects = vec![
+            Rect::new(0, 0, size, size),
+            Rect::new(size + min_s - 1, 0, 2 * size + min_s - 1, size),
+        ];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        assert!(
+            v.iter().any(|v| v.rule == DrcRule::MinSpacing),
+            "Rects at min_spacing-1 should violate MinSpacing"
+        );
+    }
+
+    #[test]
+    fn test_area_exactly_at_min() {
+        let drc = DrcRules {
+            min_area: 1.0, // 1 um^2 = 1_000_000 dbu^2
+            ..basic_rules()
+        };
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        // 1000x1000 = 1_000_000 dbu^2 = exactly 1 um^2
+        let rects = vec![Rect::new(0, 0, min_w, min_w)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        let area_violations: Vec<_> = v.iter().filter(|v| v.rule == DrcRule::MinArea).collect();
+        assert!(
+            area_violations.is_empty(),
+            "Rect at exactly min_area should pass, got: {:?}",
+            area_violations
+        );
+    }
+
+    #[test]
+    fn test_area_below_min() {
+        let drc = DrcRules {
+            min_area: 2.0, // 2 um^2 = 2_000_000 dbu^2
+            ..basic_rules()
+        };
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        // 1000x1000 = 1_000_000 dbu^2 < 2_000_000 dbu^2
+        let rects = vec![Rect::new(0, 0, min_w, min_w)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        assert!(
+            v.iter().any(|v| v.rule == DrcRule::MinArea),
+            "Rect below min_area should violate MinArea"
+        );
+    }
+
+    #[test]
+    fn test_max_width_exactly_at_max() {
+        let drc = cu_rules();
+        let max_w_dbu = um_to_dbu(drc.max_width.unwrap(), DBU_PER_UM);
+        // Rect exactly at max_width should pass
+        let rects = vec![Rect::new(0, 0, max_w_dbu, 500)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        let max_violations: Vec<_> = v.iter().filter(|v| v.rule == DrcRule::MaxWidth).collect();
+        assert!(
+            max_violations.is_empty(),
+            "Rect at exactly max_width should pass, got: {:?}",
+            max_violations
+        );
+    }
+
+    #[test]
+    fn test_max_width_one_above() {
+        let drc = cu_rules();
+        let max_w_dbu = um_to_dbu(drc.max_width.unwrap(), DBU_PER_UM);
+        // Rect one dbu above max_width should fail
+        let rects = vec![Rect::new(0, 0, max_w_dbu + 1, 500)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        assert!(
+            v.iter().any(|v| v.rule == DrcRule::MaxWidth),
+            "Rect at max_width+1 should violate MaxWidth"
+        );
+    }
+
+    // --- Empty input tests (P1) ---
+
+    #[test]
+    fn test_drc_empty_rects() {
+        let drc = basic_rules();
+        let v = check_drc(&[], DBU_PER_UM, &drc);
+        assert!(v.is_empty(), "Empty rects should produce no violations");
+    }
+
+    #[test]
+    fn test_drc_single_rect() {
+        let drc = basic_rules();
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        let size = min_w * 2;
+        let rects = vec![Rect::new(0, 0, size, size)];
+        let v = check_drc(&rects, DBU_PER_UM, &drc);
+        let structural: Vec<_> = v
+            .iter()
+            .filter(|v| {
+                matches!(
+                    v.rule,
+                    DrcRule::MinWidth | DrcRule::MinSpacing | DrcRule::MinArea
+                )
+            })
+            .collect();
+        assert!(
+            structural.is_empty(),
+            "Single valid rect should have no structural violations, got: {:?}",
+            structural
+        );
+    }
+
+    // --- Early-exit edge case tests (P2) ---
+
+    #[test]
+    fn test_capped_with_zero() {
+        let drc = basic_rules();
+        // Many violating rects, cap=0 should return immediately (empty)
+        let rects: Vec<Rect> = (0..50)
+            .map(|i| Rect::new(i * 100, 0, i * 100 + 1, 1))
+            .collect();
+        let v = check_drc_capped(&rects, DBU_PER_UM, &drc, Some(0));
+        assert!(
+            v.is_empty(),
+            "cap=0 should produce zero violations, got {}",
+            v.len()
+        );
+    }
+
+    #[test]
+    fn test_capped_with_one() {
+        let drc = basic_rules();
+        // Many violating rects, cap=1 should return at most a handful
+        let rects: Vec<Rect> = (0..50)
+            .map(|i| Rect::new(i * 100, 0, i * 100 + 1, 1))
+            .collect();
+        let v = check_drc_capped(&rects, DBU_PER_UM, &drc, Some(1));
+        assert!(
+            v.len() <= 5,
+            "cap=1 should limit violations, got {}",
+            v.len()
+        );
+    }
+
+    #[test]
+    fn test_capped_exceeding_total() {
+        let drc = basic_rules();
+        let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
+        // Two rects that both violate width - should find both even with large cap
+        let rects = vec![
+            Rect::new(0, 0, min_w - 1, min_w),
+            Rect::new(5000, 0, 5000 + min_w - 1, min_w),
+        ];
+        let v_uncapped = check_drc(&rects, DBU_PER_UM, &drc);
+        let v_capped = check_drc_capped(&rects, DBU_PER_UM, &drc, Some(1000));
+        assert_eq!(
+            v_uncapped.len(),
+            v_capped.len(),
+            "Cap exceeding total should not change result count"
+        );
+    }
+
+    #[test]
+    fn test_density_only_empty_rects() {
+        let drc = DrcRules {
+            density_max: 0.77,
+            density_window_um: 50.0,
+            ..basic_rules()
+        };
+        let v = check_density_only(&[], DBU_PER_UM, &drc, None);
+        assert!(v.is_empty(), "Empty rects should produce no violations");
     }
 }

@@ -59,3 +59,9 @@ pub mod pdk;
 pub mod polygon;
 pub mod preview;
 pub mod tiles;
+
+// Re-export key types for convenient library usage
+pub use artwork::{ArtworkBitmap, ThresholdMode};
+pub use drc::{DrcRule, DrcViolation};
+pub use pdk::{DrcRules, PdkConfig};
+pub use polygon::{PolygonStrategy, Rect};

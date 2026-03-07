@@ -322,15 +322,13 @@ fn parse_threshold(s: &str) -> Result<ThresholdMode> {
 
 /// Parse a "WxH" size string in micrometers and convert to pixel dimensions using PDK pitch.
 fn parse_size_um(s: &str, pdk: &PdkConfig, drc: &DrcRules, touching: bool) -> Result<(u32, u32)> {
-    let parts: Vec<&str> = s.split('x').collect();
-    anyhow::ensure!(
-        parts.len() == 2,
-        "size-um must be in WxH format (e.g. 2000x2000)"
-    );
-    let w_um: f64 = parts[0]
+    let (w_str, h_str) = s
+        .split_once('x')
+        .ok_or_else(|| anyhow::anyhow!("size-um must be in WxH format (e.g. 2000x2000)"))?;
+    let w_um: f64 = w_str
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid width in size-um"))?;
-    let h_um: f64 = parts[1]
+    let h_um: f64 = h_str
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid height in size-um"))?;
 
@@ -385,15 +383,13 @@ fn prepare_bitmap(
 
 /// Parse a "LAYER/DATATYPE" string into (i16, i16).
 fn parse_layer_spec(s: &str) -> Result<(i16, i16)> {
-    let parts: Vec<&str> = s.split('/').collect();
-    anyhow::ensure!(
-        parts.len() == 2,
-        "exclusion-layer must be in LAYER/DATATYPE format (e.g. 81/0)"
-    );
-    let layer: i16 = parts[0]
+    let (layer_str, dt_str) = s.split_once('/').ok_or_else(|| {
+        anyhow::anyhow!("exclusion-layer must be in LAYER/DATATYPE format (e.g. 81/0)")
+    })?;
+    let layer: i16 = layer_str
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid layer number in exclusion-layer"))?;
-    let datatype: i16 = parts[1]
+    let datatype: i16 = dt_str
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid datatype in exclusion-layer"))?;
     Ok((layer, datatype))

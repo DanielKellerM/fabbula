@@ -12,6 +12,9 @@ use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::Path;
 
+/// Polygon fill opacity for tile rendering (~0.85).
+const POLYGON_OPACITY: u8 = 217;
+
 /// Configuration for tile generation.
 pub struct TileConfig {
     /// Tile size in pixels (default 256).
@@ -47,14 +50,16 @@ pub struct TileLayer<'a> {
 }
 
 /// Parse a hex color string (e.g. "#c0c0c0") into [R, G, B].
+/// Logs a warning and returns gray on invalid input.
 pub fn parse_hex_color(s: &str) -> [u8; 3] {
-    let s = s.trim_start_matches('#');
-    if s.len() >= 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(192);
-        let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(192);
-        let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(192);
+    let hex = s.trim_start_matches('#');
+    if hex.len() >= 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(192);
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(192);
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(192);
         [r, g, b]
     } else {
+        tracing::warn!("Invalid hex color '{}', defaulting to gray", s);
         [192, 192, 192]
     }
 }
@@ -95,7 +100,7 @@ fn render_full_image(
     for layer in layers {
         let [r, g, b] = layer.color;
         let mut paint = Paint::default();
-        paint.set_color(Color::from_rgba8(r, g, b, 217)); // ~0.85 opacity
+        paint.set_color(Color::from_rgba8(r, g, b, POLYGON_OPACITY));
         paint.anti_alias = false;
 
         for rect in layer.rects {

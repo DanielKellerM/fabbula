@@ -25,6 +25,7 @@ pub struct Rect {
 
 impl Rect {
     /// Creates a new rectangle, normalizing coordinates so `x0 <= x1` and `y0 <= y1`.
+    #[inline]
     pub fn new(x0: i32, y0: i32, x1: i32, y1: i32) -> Self {
         Self {
             x0: x0.min(x1),
@@ -76,6 +77,7 @@ impl Rect {
 
 /// Strategy for converting bitmap pixels to polygons
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PolygonStrategy {
     /// Each pixel becomes one rectangle. Simple but produces many polygons.
     PixelRects,
@@ -86,6 +88,17 @@ pub enum PolygonStrategy {
     /// Run-matching vertical merge. O(W*H) with no bitset, matches identical horizontal
     /// runs between adjacent rows for vertical merging.
     HistogramMerge,
+}
+
+impl std::fmt::Display for PolygonStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PixelRects => write!(f, "pixel-rects"),
+            Self::RowMerge => write!(f, "row-merge"),
+            Self::GreedyMerge => write!(f, "greedy-merge"),
+            Self::HistogramMerge => write!(f, "histogram-merge"),
+        }
+    }
 }
 
 /// Generate DRC-clean polygons from a bitmap using the given PDK rules.
@@ -100,6 +113,7 @@ pub enum PolygonStrategy {
 /// - Adjacent "on" pixels produce touching/merged rectangles
 /// - Gaps only appear where the bitmap has "off" pixels
 /// - Pitch = max(min_width, effective_spacing) ensures min_spacing is satisfied
+#[must_use = "generated polygons should be used for GDS output or DRC checking"]
 pub fn generate_polygons(
     bitmap: &ArtworkBitmap,
     pdk: &PdkConfig,
@@ -771,24 +785,22 @@ fn emit_histogram_rect(
 
 /// Compute bounding box of all polygons
 pub fn bounding_box(rects: &[Rect]) -> Option<Rect> {
-    let first = *rects.first()?;
-    Some(rects[1..].iter().fold(first, |bb, r| Rect {
+    rects.iter().copied().reduce(|bb, r| Rect {
         x0: bb.x0.min(r.x0),
         y0: bb.y0.min(r.y0),
         x1: bb.x1.max(r.x1),
         y1: bb.y1.max(r.y1),
-    }))
+    })
 }
 
 /// Compute bounding box from a slice of references.
 pub fn bounding_box_refs(rects: &[&Rect]) -> Option<Rect> {
-    let first = **rects.first()?;
-    Some(rects[1..].iter().fold(first, |bb, r| Rect {
+    rects.iter().copied().copied().reduce(|bb, r| Rect {
         x0: bb.x0.min(r.x0),
         y0: bb.y0.min(r.y0),
         x1: bb.x1.max(r.x1),
         y1: bb.y1.max(r.y1),
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -989,5 +1001,76 @@ mod tests {
         let expected_on = bools.iter().filter(|&&b| b).count();
         let total_pixels: i64 = rects.iter().map(|r| r.area() / (10 * 10)).sum();
         assert_eq!(total_pixels as usize, expected_on);
+    }
+
+    // --- Empty/zero-size input tests (P1) ---
+
+    #[test]
+    fn test_bounding_box_empty() {
+        assert_eq!(bounding_box(&[]), None);
+    }
+
+    #[test]
+    fn test_bounding_box_single() {
+        let r = Rect::new(10, 20, 30, 40);
+        assert_eq!(bounding_box(&[r]), Some(r));
+    }
+
+    #[test]
+    fn test_bounding_box_refs_empty() {
+        let empty: Vec<&Rect> = vec![];
+        assert_eq!(bounding_box_refs(&empty), None);
+    }
+
+    #[test]
+    fn test_single_pixel_bitmap() {
+        let bmp = ArtworkBitmap::from_bools(1, 1, &[true]);
+        let rects = pixel_rects(&bmp, 100, 200);
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].width(), 100);
+        assert_eq!(rects[0].height(), 100);
+    }
+
+    #[test]
+    fn test_all_off_bitmap() {
+        let bmp = ArtworkBitmap::from_bools(4, 4, &[false; 16]);
+        assert_eq!(pixel_rects(&bmp, 100, 200).len(), 0);
+        assert_eq!(row_merged_rects(&bmp, 100, 200, u16::MAX).len(), 0);
+        assert_eq!(greedy_merged_rects(&bmp, 100, 200, u16::MAX).len(), 0);
+        assert_eq!(histogram_merged_rects(&bmp, 100, 200, u16::MAX).len(), 0);
+    }
+
+    #[test]
+    fn test_single_row_bitmap() {
+        let bmp = ArtworkBitmap::from_bools(5, 1, &[true, false, true, true, false]);
+        let rects = row_merged_rects(&bmp, 100, 200, u16::MAX);
+        assert_eq!(rects.len(), 2); // two runs: [0] and [2,3]
+    }
+
+    #[test]
+    fn test_single_column_bitmap() {
+        // 1x4 column: on, on, off, on - should produce 2 rects (merged run + single)
+        let bmp = ArtworkBitmap::from_bools(1, 4, &[true, true, false, true]);
+        let rects = greedy_merged_rects(&bmp, 100, 100, u16::MAX);
+        let total_pixels: i64 = rects.iter().map(|r| r.area() / (100 * 100)).sum();
+        assert_eq!(total_pixels, 3);
+    }
+
+    #[test]
+    fn test_rect_zero_area() {
+        // Rect::new normalizes, so (5,5,5,5) gives width=0, height=0
+        let r = Rect::new(5, 5, 5, 5);
+        assert_eq!(r.width(), 0);
+        assert_eq!(r.height(), 0);
+        assert_eq!(r.area(), 0);
+    }
+
+    #[test]
+    fn test_display_polygon_strategy() {
+        assert_eq!(format!("{}", PolygonStrategy::GreedyMerge), "greedy-merge");
+        assert_eq!(
+            format!("{}", PolygonStrategy::HistogramMerge),
+            "histogram-merge"
+        );
     }
 }

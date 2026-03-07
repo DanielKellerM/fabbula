@@ -15,6 +15,7 @@ use std::path::Path;
 
 /// Color extraction mode for multi-layer artwork
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColorMode {
     /// Extract R/G/B channels and map to layers by profile color field
     Channel,

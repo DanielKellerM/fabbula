@@ -15,6 +15,14 @@ use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::Path;
 
+/// Convert a `gds21::GdsError` (which doesn't impl `std::error::Error`) to `anyhow::Error`.
+fn gds_err(e: gds21::GdsError, context: &str) -> anyhow::Error {
+    anyhow::anyhow!("{}: {:?}", context, e)
+}
+
+/// Maximum number of AREF instances to flatten before bailing out.
+const MAX_AREF_INSTANCES: i64 = 100_000;
+
 /// Load a GDS library, transparently decompressing .gz files.
 fn load_gds(path: &Path) -> Result<GdsLibrary> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -35,15 +43,14 @@ fn load_gds(path: &Path) -> Result<GdsLibrary> {
             decompressed.len() as f64 / 1_000_000.0
         );
         GdsLibrary::load(tmp_file.path()).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to read decompressed GDSII {}: {:?}",
-                path.display(),
-                e
+            gds_err(
+                e,
+                &format!("Failed to read decompressed GDSII {}", path.display()),
             )
         })
     } else {
         GdsLibrary::load(path)
-            .map_err(|e| anyhow::anyhow!("Failed to read GDSII {}: {:?}", path.display(), e))
+            .map_err(|e| gds_err(e, &format!("Failed to read GDSII {}", path.display())))
     }
 }
 
@@ -109,7 +116,7 @@ pub fn write_gds_multi(layers: &[LayerRects], cell_name: &str, output: &Path) ->
     lib.structs.push(cell);
 
     lib.save(output)
-        .map_err(|e| anyhow::anyhow!("Failed to write GDSII {}: {:?}", output.display(), e))?;
+        .map_err(|e| gds_err(e, &format!("Failed to write GDSII {}", output.display())))?;
 
     tracing::info!(
         "Wrote {} polygons ({} layers) to {} (cell: {})",
@@ -173,8 +180,12 @@ pub fn merge_into_gds_multi(
         }
     }
 
-    lib.save(output_gds)
-        .map_err(|e| anyhow::anyhow!("Failed to write GDSII {}: {:?}", output_gds.display(), e))?;
+    lib.save(output_gds).map_err(|e| {
+        gds_err(
+            e,
+            &format!("Failed to write GDSII {}", output_gds.display()),
+        )
+    })?;
 
     tracing::info!(
         "Merged {} artwork polygons ({} layers) into {} -> {}",
@@ -213,7 +224,7 @@ pub fn merge_into_gds(
 
 /// Accumulated GDS transformation (reflect, rotate, magnify, translate).
 /// GDS spec order: reflect about x-axis, then rotate, then magnify, then translate.
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 struct Transform {
     offset_x: f64,
     offset_y: f64,
@@ -360,7 +371,15 @@ fn flatten_cell(
                 if p.xy.is_empty() {
                     continue;
                 }
-                let half_w = p.width.unwrap_or(0).max(0) / 2;
+                let raw_width = p.width.unwrap_or(0);
+                if raw_width <= 0 {
+                    tracing::warn!(
+                        "GDS path on layer {}/{} has zero or missing width, treating as zero-width",
+                        p.layer,
+                        p.datatype
+                    );
+                }
+                let half_w = raw_width.max(0) / 2;
                 // Compute raw vertex bbox first
                 let mut x0 = i32::MAX;
                 let mut y0 = i32::MAX;
@@ -418,6 +437,18 @@ fn flatten_cell(
                     let origin = &aref.xy[0];
                     let cols = aref.cols.max(0) as i32;
                     let rows = aref.rows.max(0) as i32;
+                    let instance_count = cols as i64 * rows as i64;
+                    if instance_count > MAX_AREF_INSTANCES {
+                        tracing::warn!(
+                            "AREF '{}' has {} instances ({}x{}), exceeding limit of {}; skipping",
+                            aref.name,
+                            instance_count,
+                            cols,
+                            rows,
+                            MAX_AREF_INSTANCES
+                        );
+                        continue;
+                    }
 
                     let col_pitch_x = if cols > 0 {
                         (aref.xy[1].x - origin.x) / cols
