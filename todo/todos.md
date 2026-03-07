@@ -442,11 +442,12 @@
 ### The Hard Questions
 
 **"Why not just use ArtistIC?"**
-ArtistIC has been used on real tapeouts. fabbula has not. ArtistIC's tetromino fill is genuinely
-more sophisticated than fabbula's pixel-grid approach. ArtistIC handles fill around existing
-structures natively via KLayout integration. fabbula's merge workflow is more manual and less
-proven. The comparison table in the README is feature-accurate but arguably misleading since it
-doesn't weight "has actually been taped out" heavily enough.
+ArtistIC has been used on real tapeouts. fabbula has not. That's the credibility gap.
+Technically, ArtistIC uses 4x4 kernel pattern matching with 10 dithering primitives and
+post-filters undersized polygons (< 2000nm). No polygon merging, no density enforcement,
+no spacing checks. fabbula's DRC-by-construction approach is more rigorous, but ArtistIC
+is silicon-proven on IHP SG13G2. ArtistIC handles exclusion via KLayout boolean subtraction.
+Requires: KLayout, ImageMagick, Inkscape, Potrace, Python, gdspy. IHP SG13G2 only.
 
 **"Does DRC-by-construction really work?"**
 The core pitch-based approach is sound for width/spacing/area. But the claim has caveats that
@@ -494,11 +495,10 @@ but could hurt credibility with experts who know these aren't real.
   - Standard for any DRC tool, even simple ones
   - Files: `src/drc.rs`, `src/main.rs`
 
-- [ ] **P1** README comparison table doesn't weight "silicon-proven" enough
-  - Table shows feature checkboxes that make fabbula look superior to ArtistIC
-  - But ArtistIC has been used on real tapeouts; fabbula has not
-  - The disclaimer note exists but the visual impression of the table dominates
-  - Consider adding a "Tapeout proven" row or restructuring the comparison
+- [x] **P1** README comparison table doesn't weight "silicon-proven" enough
+  - Fixed: added "Tapeout proven" row to comparison table
+  - Fixed: corrected ArtistIC description (was "tetromino fill", actually 4x4 kernel + size filter)
+  - Fixed: ArtistIC DRC column now says "Post-filter (min size)" instead of "Tetromino fill"
   - Files: `README.md`
 
 ### P2 - Usability / Testing

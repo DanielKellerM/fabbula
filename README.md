@@ -209,7 +209,7 @@ fabbula was born from a simple idea: reimplement image-to-GDSII artwork generati
 
 Several open-source tools tackle the image-to-GDSII problem. Each one contributed something valuable to the space:
 
-- **[ArtistIC](https://github.com/pulp-platform/artistic)** (PULP Platform, 2025) - The most complete existing pipeline. Its tetromino-based polygon generation produces genuinely DRC-clean artwork by flowing shapes around existing top-metal structures. Also includes gigapixel-scale tiled rendering via KLayout and DEF-based annotation. Python, requires KLayout + ImageMagick + Potrace. IHP SG13G2 focused.
+- **[ArtistIC](https://github.com/pulp-platform/artistic)** (PULP Platform, 2025) - Converts images to GDS using 4x4 kernel pattern matching with 10 dithering primitives, then filters undersized polygons. Uses KLayout for GDS export/merge and boolean subtraction for exclusion zones. Tapeout-proven on IHP SG13G2. Python, requires KLayout + ImageMagick + Inkscape + Potrace. IHP SG13G2 only.
 - **[logo-to-gds2](https://github.com/mattvenn/logo-to-gds2)** (Matt Venn, ~2020) - Converts PNG/SVG to GDS2 + LEF for top-metal artwork, built for the Zero to ASIC / SKY130 / OpenLane / Caravel ecosystem. Python + Magic VLSI. No automatic DRC compliance.
 - **[chip_art](https://github.com/jazvw/chip_art)** (jazvw) - Maps grayscale pixel values to different metal layers (metals 1-4) for multi-layer artwork. Python + Magic VLSI + Docker. SKY130 focused.
 - **[png2gds](https://github.com/ralight/png2gds)** (ralight) - Lightweight C tool mapping indexed-palette PNG colors to GDS layers. One square polygon per pixel. Designed to make adding logos to chip designs straightforward.
@@ -220,7 +220,7 @@ There are also several other converters ([gdsGEN](https://github.com/raghu1153/g
 
 ### Where fabbula fits
 
-All existing tools are Python or C, most require external dependencies (Magic VLSI, KLayout, ImageMagick, Docker), and none except ArtistIC address DRC compliance automatically. fabbula's contribution is bringing this to Rust: a single `cargo install`, no runtime dependencies, with DRC-clean output by construction via grid-snapped polygon sizing.
+All existing tools are Python or C, and most require external dependencies (Magic VLSI, KLayout, ImageMagick, Docker). ArtistIC filters undersized polygons post-generation; fabbula guarantees width/spacing compliance by construction via PDK-derived pitch sizing, and adds a built-in DRC checker with density enforcement. fabbula's contribution is bringing this to Rust: a single `cargo install`, no runtime dependencies.
 
 **Note:** Unlike ArtistIC, fabbula has not yet been used on a production tapeout. See the [Disclaimer](#disclaimer) section. The comparison below reflects feature availability, not silicon-proven status.
 
@@ -229,11 +229,12 @@ All existing tools are Python or C, most require external dependencies (Magic VL
 | Language | Rust | Python | Python | C | Python |
 | Self-contained | Yes | No (KLayout, IM, Potrace) | No (Magic VLSI) | Yes | No (Magic, Docker) |
 | Multi-PDK | 6 built-in + custom TOML | IHP SG13G2 | SKY130 | Manual | SKY130 |
-| DRC-clean output | By construction (width/spacing) | Tetromino fill | Manual | No | No |
+| DRC-clean output | By construction (width/spacing) | Post-filter (min size) | Manual | No | No |
 | Parallel DRC | Yes (rayon) | No | No | No | No |
 | GDS merge | Yes | Yes (via KLayout) | No | No | No |
 | Built-in DRC check | Yes | No | No | No | No |
 | SVG preview | Yes | Yes (via KLayout) | No | No | No |
+| Tapeout proven | **No** | Yes (IHP SG13G2) | Yes (SKY130) | No | Yes (SKY130) |
 
 ## Performance
 
