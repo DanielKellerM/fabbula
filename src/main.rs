@@ -17,7 +17,7 @@ use fabbula::lef::{LefLayer, write_lef_multi};
 use fabbula::pdk::{ArtworkLayerProfile, DrcRules, PdkConfig};
 use fabbula::polygon::{PolygonStrategy, Rect, bounding_box, generate_polygons};
 use fabbula::preview::{
-    DEFAULT_LAYER_COLORS, HtmlLayer, write_html_preview_multi, write_svg_multi,
+    DEFAULT_LAYER_COLORS, HtmlLayer, SvgLayer, write_html_preview_multi, write_svg_multi,
 };
 
 #[derive(Parser)]
@@ -82,9 +82,9 @@ enum Commands {
         #[arg(long, default_value = "greedy-merge", value_enum)]
         strategy: StrategyArg,
 
-        /// Allow adjacent metal pixels to touch (denser artwork, fewer DRC guarantees)
+        /// Use separated mode with guaranteed spacing between all pixels
         #[arg(long)]
-        touching: bool,
+        separated: bool,
 
         /// Maximum image width in pixels (for limiting GDS complexity)
         #[arg(long)]
@@ -170,9 +170,9 @@ enum Commands {
         #[arg(long, default_value = "greedy-merge", value_enum)]
         strategy: StrategyArg,
 
-        /// Allow touching
+        /// Use separated mode with guaranteed spacing between all pixels
         #[arg(long)]
-        touching: bool,
+        separated: bool,
 
         /// Max width
         #[arg(long)]
@@ -222,6 +222,7 @@ enum StrategyArg {
     PixelRects,
     RowMerge,
     GreedyMerge,
+    HistogramMerge,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -240,6 +241,7 @@ impl From<StrategyArg> for PolygonStrategy {
             StrategyArg::PixelRects => PolygonStrategy::PixelRects,
             StrategyArg::RowMerge => PolygonStrategy::RowMerge,
             StrategyArg::GreedyMerge => PolygonStrategy::GreedyMerge,
+            StrategyArg::HistogramMerge => PolygonStrategy::HistogramMerge,
         }
     }
 }
@@ -513,7 +515,7 @@ fn main() -> Result<()> {
             cell_name,
             threshold,
             strategy,
-            touching,
+            separated,
             max_width,
             max_height,
             size_um,
@@ -528,6 +530,7 @@ fn main() -> Result<()> {
         } => {
             let pdk = load_pdk(&pdk)?;
             let strategy: PolygonStrategy = strategy.into();
+            let touching = !separated;
             let density_enforce = !no_density_enforce;
             let profiles = pdk.layer_profiles();
             // For size_um, use the DRC rules that will actually be used for generation
@@ -664,12 +667,12 @@ fn main() -> Result<()> {
 
             // SVG
             if let Some(svg_path) = svg {
-                let svg_layers: Vec<(&[Rect], &str)> = layer_results
+                let svg_layers: Vec<SvgLayer> = layer_results
                     .iter()
                     .enumerate()
-                    .map(|(i, (rects, _))| {
-                        let color = DEFAULT_LAYER_COLORS[i % DEFAULT_LAYER_COLORS.len()];
-                        (rects.as_slice(), color)
+                    .map(|(i, (rects, _))| SvgLayer {
+                        rects: rects.as_slice(),
+                        color: DEFAULT_LAYER_COLORS[i % DEFAULT_LAYER_COLORS.len()],
                     })
                     .collect();
                 write_svg_multi(&svg_layers, &svg_path, 0.01, Some("#1a1a2e"))?;
@@ -702,7 +705,7 @@ fn main() -> Result<()> {
             offset_y,
             threshold,
             strategy,
-            touching,
+            separated,
             max_width,
             max_height,
             size_um,
@@ -714,6 +717,7 @@ fn main() -> Result<()> {
         } => {
             let pdk = load_pdk(&pdk)?;
             let strategy: PolygonStrategy = strategy.into();
+            let touching = !separated;
             let density_enforce = !no_density_enforce;
             let profiles = pdk.layer_profiles();
             let size_um_drc = match color_mode {

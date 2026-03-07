@@ -1,5 +1,7 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use fabbula::artwork::{ArtworkBitmap, enforce_density};
+use fabbula::artwork::{ArtworkBitmap, apply_exclusion_mask, enforce_density};
+use fabbula::pdk::PdkConfig;
+use fabbula::polygon::Rect;
 
 fn solid_bitmap(size: u32) -> ArtworkBitmap {
     ArtworkBitmap::from_bools(size, size, &vec![true; (size * size) as usize])
@@ -107,6 +109,79 @@ fn bench_enforce_density_500(c: &mut Criterion) {
     });
 }
 
+/// Create exclusion rects simulating a grid of bond pads over a 512x512 bitmap.
+fn make_exclusion_setup(size: u32, num_rects: usize) -> (ArtworkBitmap, Vec<Rect>, PdkConfig) {
+    let pdk = PdkConfig::builtin("sky130").unwrap();
+    let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
+    let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
+    let pitch = pdk.um_to_dbu(min_w_um + min_s_um);
+    let pw = pdk.um_to_dbu(min_w_um);
+
+    let bmp = solid_bitmap(size);
+
+    // Create a grid of exclusion rects spread across the bitmap area
+    let grid_side = (num_rects as f64).sqrt().ceil() as usize;
+    let spacing = (size as i32 * pitch) / grid_side as i32;
+    let rect_size = pw * 3; // Each rect covers ~3x3 pixels
+    let mut rects = Vec::with_capacity(num_rects);
+    for gy in 0..grid_side {
+        for gx in 0..grid_side {
+            if rects.len() >= num_rects {
+                break;
+            }
+            let cx = gx as i32 * spacing + spacing / 2;
+            let cy = gy as i32 * spacing + spacing / 2;
+            rects.push(Rect::new(cx, cy, cx + rect_size, cy + rect_size));
+        }
+    }
+
+    (bmp, rects, pdk)
+}
+
+fn bench_exclusion_mask(c: &mut Criterion) {
+    let (bmp, rects, pdk) = make_exclusion_setup(512, 64);
+    let margin = pdk.um_to_dbu(pdk.snap_to_grid(pdk.drc.min_spacing));
+
+    let mut group = c.benchmark_group("exclusion_mask_512");
+    group.bench_function("rasterized", |b| {
+        b.iter_batched(
+            || bmp.clone(),
+            |mut bmp| {
+                apply_exclusion_mask(
+                    black_box(&mut bmp),
+                    black_box(&rects),
+                    black_box(&pdk),
+                    black_box(margin),
+                );
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
+fn bench_exclusion_mask_large(c: &mut Criterion) {
+    let (bmp, rects, pdk) = make_exclusion_setup(2048, 256);
+    let margin = pdk.um_to_dbu(pdk.snap_to_grid(pdk.drc.min_spacing));
+
+    let mut group = c.benchmark_group("exclusion_mask_2048");
+    group.bench_function("rasterized", |b| {
+        b.iter_batched(
+            || bmp.clone(),
+            |mut bmp| {
+                apply_exclusion_mask(
+                    black_box(&mut bmp),
+                    black_box(&rects),
+                    black_box(&pdk),
+                    black_box(margin),
+                );
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_build_sat,
@@ -114,5 +189,7 @@ criterion_group!(
     bench_count_window,
     bench_enforce_density_200,
     bench_enforce_density_500,
+    bench_exclusion_mask,
+    bench_exclusion_mask_large,
 );
 criterion_main!(benches);

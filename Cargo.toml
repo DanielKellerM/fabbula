@@ -80,6 +80,11 @@ name = "bench_artwork"
 harness = false
 path = "profiling/bench_artwork.rs"
 
+[[bench]]
+name = "bench_die_scale"
+harness = false
+path = "profiling/bench_die_scale.rs"
+
 [package.metadata.docs.rs]
 all-features = true
 

@@ -50,13 +50,19 @@ fn load_gds(path: &Path) -> Result<GdsLibrary> {
 }
 
 fn format_cell_list(structs: &[GdsStruct]) -> String {
-    let names: Vec<&str> = structs.iter().map(|s| s.name.as_str()).collect();
-    if names.len() <= 20 {
-        names.join(", ")
+    if structs.len() <= 20 {
+        structs
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     } else {
-        let mut s = names[..20].join(", ");
-        s.push_str(&format!(" ... and {} more", names.len() - 20));
-        s
+        let first20: String = structs[..20]
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{} ... and {} more", first20, structs.len() - 20)
     }
 }
 

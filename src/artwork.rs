@@ -11,7 +11,6 @@
 use crate::pdk::PdkConfig;
 use anyhow::{Context, Result};
 use image::{GenericImageView, Luma};
-use rstar::{AABB, RTree, RTreeObject};
 use std::path::Path;
 
 /// A binary bitmap where true = metal, false = gap.
@@ -59,6 +58,12 @@ impl ArtworkBitmap {
     #[inline]
     pub fn words(&self) -> &[u64] {
         &self.pixels
+    }
+
+    /// Access the raw packed words (mutable)
+    #[inline]
+    pub fn words_mut(&mut self) -> &mut [u64] {
+        &mut self.pixels
     }
 
     /// Return the packed word slice and the bit offset of the first pixel for row `y`.
@@ -242,28 +247,81 @@ fn otsu_threshold(img: &image::GrayImage) -> u8 {
     best_threshold
 }
 
-/// Grown exclusion rect for R-tree spatial index
-#[derive(Debug, Clone, Copy)]
-struct GrownRect {
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
+/// Clear bits [start, start+len) in a bitset using word-level operations.
+/// Mirrors `bulk_set_bits` in polygon.rs but uses `&= !mask` instead of `|= mask`.
+#[inline]
+fn bulk_clear_bits(words: &mut [u64], start: usize, len: usize) {
+    if len == 0 {
+        return;
+    }
+    let end = start + len;
+    let first_word = start / 64;
+    let last_word = (end - 1) / 64;
+    let first_bit = start % 64;
+    let last_bit_incl = (end - 1) % 64;
+
+    if first_word == last_word {
+        let mask = (if last_bit_incl == 63 {
+            !0u64
+        } else {
+            (1u64 << (last_bit_incl + 1)) - 1
+        }) & (!0u64 << first_bit);
+        words[first_word] &= !mask;
+        return;
+    }
+
+    words[first_word] &= !(!0u64 << first_bit);
+    for w in &mut words[first_word + 1..last_word] {
+        *w = 0;
+    }
+    words[last_word] &= !(if last_bit_incl == 63 {
+        !0u64
+    } else {
+        (1u64 << (last_bit_incl + 1)) - 1
+    });
 }
 
-impl RTreeObject for GrownRect {
-    type Envelope = AABB<[i32; 2]>;
-
-    fn envelope(&self) -> Self::Envelope {
-        AABB::from_corners([self.x0, self.y0], [self.x1, self.y1])
+/// Count set bits in [start, start+len) using word-level popcount.
+#[inline]
+fn count_bits_in_range(words: &[u64], start: usize, len: usize) -> usize {
+    if len == 0 {
+        return 0;
     }
+    let end = start + len;
+    let first_word = start / 64;
+    let last_word = (end - 1) / 64;
+    let first_bit = start % 64;
+    let last_bit_incl = (end - 1) % 64;
+
+    if first_word == last_word {
+        let mask = (if last_bit_incl == 63 {
+            !0u64
+        } else {
+            (1u64 << (last_bit_incl + 1)) - 1
+        }) & (!0u64 << first_bit);
+        return (words[first_word] & mask).count_ones() as usize;
+    }
+
+    let mut count = (words[first_word] & (!0u64 << first_bit)).count_ones() as usize;
+    for w in &words[first_word + 1..last_word] {
+        count += w.count_ones() as usize;
+    }
+    let last_mask = if last_bit_incl == 63 {
+        !0u64
+    } else {
+        (1u64 << (last_bit_incl + 1)) - 1
+    };
+    count += (words[last_word] & last_mask).count_ones() as usize;
+    count
 }
 
 /// Apply exclusion zones to the bitmap, masking out pixels that overlap with
 /// existing metal rectangles (grown by margin). Used to avoid placing artwork
 /// over bond pads, power straps, seal ring, etc.
 ///
-/// Uses R-tree spatial index for O(pixels * log(rects)) instead of O(pixels * rects).
+/// Uses scan-line rasterization: for each exclusion rect, compute the pixel
+/// column/row range via inverse coordinate mapping, then bulk-clear those bits.
+/// O(total_exclusion_area_in_pixels) instead of O(pixels * log(rects)).
 ///
 /// The mapping from bitmap pixels to physical coordinates:
 /// pixel (x, y) covers physical range [x * pitch, x * pitch + pixel_w] x
@@ -283,38 +341,64 @@ pub fn apply_exclusion_mask(
         return;
     }
 
-    // Build R-tree over grown exclusion rects
-    let grown: Vec<GrownRect> = exclusion_rects
-        .iter()
-        .map(|er| GrownRect {
-            x0: er.x0 - margin_dbu,
-            y0: er.y0 - margin_dbu,
-            x1: er.x1 + margin_dbu,
-            y1: er.y1 + margin_dbu,
-        })
-        .collect();
-    let tree = RTree::bulk_load(grown);
+    let bw = bitmap.width as usize;
+    let bh = bitmap.height as i32;
 
     let mut masked = 0usize;
-    for y in 0..bitmap.height {
-        let py0 = (bitmap.height - 1 - y) as i32 * pitch_dbu;
-        let py1 = py0 + pixel_w_dbu;
-        for x in 0..bitmap.width {
-            if !bitmap.get(x, y) {
-                continue;
-            }
-            let px0 = x as i32 * pitch_dbu;
-            let px1 = px0 + pixel_w_dbu;
 
-            let pixel_env = AABB::from_corners([px0, py0], [px1, py1]);
-            if tree
-                .locate_in_envelope_intersecting(&pixel_env)
-                .next()
-                .is_some()
-            {
-                bitmap.set(x, y, false);
-                masked += 1;
-            }
+    for er in exclusion_rects {
+        // Grow by margin
+        let gx0 = er.x0 - margin_dbu;
+        let gy0 = er.y0 - margin_dbu;
+        let gx1 = er.x1 + margin_dbu;
+        let gy1 = er.y1 + margin_dbu;
+
+        // Inverse mapping: pixel x overlaps grown rect if
+        //   x * pitch < gx1  AND  x * pitch + pixel_w > gx0
+        // => x < gx1 / pitch  AND  x >= ceil((gx0 - pixel_w + 1) / pitch)
+        // ceil(a / b) for non-negative a, positive b
+        let x_start = {
+            let a = (gx0 - pixel_w_dbu + 1).max(0);
+            ((a + pitch_dbu - 1) / pitch_dbu).max(0) as usize
+        };
+        let x_end = if gx1 <= 0 {
+            0usize
+        } else {
+            // x < gx1 / pitch, but also x * pitch + pixel_w > gx0, so:
+            // last valid x: floor((gx1 - 1) / pitch), but only if x*pitch < gx1
+            (((gx1 - 1) / pitch_dbu + 1) as usize).min(bw)
+        };
+
+        if x_start >= x_end {
+            continue;
+        }
+
+        // Inverse mapping for y: pixel y maps to physical_y = (H-1-y) * pitch
+        // pixel overlaps if (H-1-y)*pitch < gy1 AND (H-1-y)*pitch + pixel_w > gy0
+        // => H-1-y < gy1/pitch AND H-1-y >= ceil((gy0-pixel_w+1)/pitch)
+        // Let j = H-1-y, so y = H-1-j
+        let j_start = {
+            let a = (gy0 - pixel_w_dbu + 1).max(0);
+            (a + pitch_dbu - 1) / pitch_dbu
+        };
+        let j_end = if gy1 <= 0 {
+            0
+        } else {
+            ((gy1 - 1) / pitch_dbu + 1).min(bh)
+        };
+
+        if j_start >= j_end {
+            continue;
+        }
+
+        let col_len = x_end - x_start;
+        let words = bitmap.words_mut();
+
+        for j in j_start..j_end {
+            let y = (bh - 1 - j) as usize;
+            let row_bit_start = y * bw + x_start;
+            masked += count_bits_in_range(words, row_bit_start, col_len);
+            bulk_clear_bits(words, row_bit_start, col_len);
         }
     }
 
@@ -535,20 +619,54 @@ pub fn count_on_in_window(bitmap: &ArtworkBitmap, wx: u32, wy: u32, win_w: u32, 
 }
 
 /// Count 8-connected on-neighbors of pixel (x, y).
+/// Uses direct word access to avoid per-neighbor bounds checks and division.
+#[inline]
 fn count_neighbors(bitmap: &ArtworkBitmap, x: u32, y: u32) -> u8 {
+    let w = bitmap.width as usize;
+    let h = bitmap.height;
+    let words = bitmap.words();
     let mut count = 0u8;
-    for dy in [-1i32, 0, 1] {
-        for dx in [-1i32, 0, 1] {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            let nx = x as i32 + dx;
-            let ny = y as i32 + dy;
-            if nx >= 0 && ny >= 0 && bitmap.get(nx as u32, ny as u32) {
-                count += 1;
-            }
+
+    let has_left = x > 0;
+    let has_right = x + 1 < bitmap.width;
+    let has_up = y > 0;
+    let has_down = y + 1 < h;
+
+    // Row above
+    if has_up {
+        let base = (y as usize - 1) * w + x as usize;
+        if has_left {
+            count += ((words[(base - 1) / 64] >> ((base - 1) % 64)) & 1) as u8;
+        }
+        count += ((words[base / 64] >> (base % 64)) & 1) as u8;
+        if has_right {
+            count += ((words[(base + 1) / 64] >> ((base + 1) % 64)) & 1) as u8;
         }
     }
+
+    // Same row
+    {
+        let base = y as usize * w + x as usize;
+        if has_left {
+            count += ((words[(base - 1) / 64] >> ((base - 1) % 64)) & 1) as u8;
+        }
+        if has_right {
+            count += ((words[(base + 1) / 64] >> ((base + 1) % 64)) & 1) as u8;
+        }
+    }
+
+    // Row below
+    if has_down {
+        let base = (y as usize + 1) * w + x as usize;
+        if has_left {
+            count += ((words[(base - 1) / 64] >> ((base - 1) % 64)) & 1) as u8;
+        }
+        count += ((words[base / 64] >> (base % 64)) & 1) as u8;
+        if has_right {
+            count += ((words[(base + 1) / 64] >> ((base + 1) % 64)) & 1) as u8;
+        }
+    }
+
     count
 }
 

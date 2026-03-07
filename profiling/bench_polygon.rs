@@ -128,6 +128,70 @@ fn bench_greedy_merge_4096(c: &mut Criterion) {
     });
 }
 
+fn bench_histogram_merge_256(c: &mut Criterion) {
+    let bmp = dense_pattern(256);
+    let pdk = PdkConfig::builtin("sky130").unwrap();
+    c.bench_function("histogram_merge_256", |b| {
+        b.iter(|| {
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::HistogramMerge,
+                false,
+            );
+        });
+    });
+}
+
+fn bench_histogram_merge_512(c: &mut Criterion) {
+    let bmp = dense_pattern(512);
+    let pdk = PdkConfig::builtin("sky130").unwrap();
+    c.bench_function("histogram_merge_512", |b| {
+        b.iter(|| {
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::HistogramMerge,
+                false,
+            );
+        });
+    });
+}
+
+fn bench_histogram_merge_2048(c: &mut Criterion) {
+    let bmp = dense_pattern(2048);
+    let pdk = PdkConfig::builtin("sky130").unwrap();
+    c.bench_function("histogram_merge_2048", |b| {
+        b.iter(|| {
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::HistogramMerge,
+                false,
+            );
+        });
+    });
+}
+
+fn bench_histogram_merge_4096(c: &mut Criterion) {
+    let bmp = dense_pattern(4096);
+    let pdk = PdkConfig::builtin("sky130").unwrap();
+    c.bench_function("histogram_merge_4096", |b| {
+        b.iter(|| {
+            let _ = generate_polygons(
+                black_box(&bmp),
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::HistogramMerge,
+                false,
+            );
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_greedy_merge_256,
@@ -137,5 +201,9 @@ criterion_group!(
     bench_greedy_merge_2048,
     bench_row_merge_2048,
     bench_greedy_merge_4096,
+    bench_histogram_merge_256,
+    bench_histogram_merge_512,
+    bench_histogram_merge_2048,
+    bench_histogram_merge_4096,
 );
 criterion_main!(benches);

@@ -165,13 +165,15 @@ pub fn extract_palette(
     });
 
     // The last entry (brightest) is background - skip it
-    let bg_cluster = *centroid_order.last().unwrap();
-    let bg_c = &centroids[bg_cluster];
+    let bg_cluster = *centroid_order
+        .last()
+        .expect("centroid_order is non-empty (k >= 2)");
+    let bg_color = &centroids[bg_cluster];
     tracing::info!(
         "Palette background: centroid RGB({:.0},{:.0},{:.0}) - skipped",
-        bg_c[0],
-        bg_c[1],
-        bg_c[2],
+        bg_color[0],
+        bg_color[1],
+        bg_color[2],
     );
 
     // Build reverse mapping for the remaining clusters (darkest first)
@@ -222,8 +224,12 @@ fn kmeans(pixels: &[[f32; 3]], k: usize, max_iters: usize) -> Vec<[f32; 3]> {
     // First centroid: darkest pixel
     let first = pixels
         .iter()
-        .min_by(|a, b| luminance(a).partial_cmp(&luminance(b)).unwrap())
-        .unwrap();
+        .min_by(|a, b| {
+            luminance(a)
+                .partial_cmp(&luminance(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("pixels is non-empty (checked above)");
     centroids.push(*first);
 
     for _ in 1..k {
@@ -231,17 +237,19 @@ fn kmeans(pixels: &[[f32; 3]], k: usize, max_iters: usize) -> Vec<[f32; 3]> {
         let best = pixels
             .iter()
             .max_by(|a, b| {
-                let da: f32 = centroids
+                let dist_a: f32 = centroids
                     .iter()
                     .map(|c| (a[0] - c[0]).powi(2) + (a[1] - c[1]).powi(2) + (a[2] - c[2]).powi(2))
                     .fold(f32::MAX, f32::min);
-                let db: f32 = centroids
+                let dist_b: f32 = centroids
                     .iter()
                     .map(|c| (b[0] - c[0]).powi(2) + (b[1] - c[1]).powi(2) + (b[2] - c[2]).powi(2))
                     .fold(f32::MAX, f32::min);
-                da.partial_cmp(&db).unwrap()
+                dist_a
+                    .partial_cmp(&dist_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .unwrap();
+            .expect("pixels is non-empty (checked above)");
         centroids.push(*best);
     }
 

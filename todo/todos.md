@@ -50,7 +50,24 @@
   - Eliminates max_width DRC violations for fabbula2, ASAP7
   - Files: `src/polygon.rs`
 
+- [x] **P1** Performance optimization Phase 3: Exclusion mask + neighbor counting
+  - Scan-line rasterization for `apply_exclusion_mask` (replaces R-tree per-pixel queries)
+  - `bulk_clear_bits` and `count_bits_in_range` word-level helpers
+  - Inlined `count_neighbors` with direct word access (no bounds checks)
+  - Results: enforce_density -25% to -26%, exclusion mask ~500ns for 512x512
+  - Files: `src/artwork.rs`, `profiling/bench_artwork.rs`
+
 ## Features
+
+- [ ] **P2** Smart auto-polarity and threshold improvements
+  - Current: Otsu threshold with "dark = metal" convention, manual `--invert` flag
+  - Auto-polarity: if >50% pixels are metal after thresholding, auto-invert (subject is likely bright on dark bg)
+  - Explore adaptive thresholding (e.g. Sauvola, Niblack) for images with uneven lighting
+  - Consider edge detection (Canny/Sobel) as alternative to luminance thresholding for line art
+  - Metal-layer-aware: real metal appears bright/reflective in microscopy - could default to "bright = metal"
+  - Color-aware thresholding: use saturation/hue channels, not just luminance, for colored artwork
+  - Histogram analysis: detect bimodal vs unimodal distributions and warn when Otsu is unreliable
+  - Files: `src/artwork.rs`
 
 - [x] **P1** Add color/multi-layer support from PDK layer maps
   - `ArtworkLayerProfile` struct with per-layer DRC in `src/pdk.rs`
@@ -91,11 +108,11 @@
 
 ## Performance / Profiling
 
-- [ ] **P2** Die-scale benchmarks for profiling suite
-  - Separate benchmark group (`cargo bench --bench bench_die_scale`), not in default `cargo bench`
-  - Option 1: Checkerboard 17812x17812 - bump `gen_test_image.rs` size. Stresses greedy-merge + GDS write without density enforcement dominating
-  - Option 2: Noise/mixed pattern ~40% fill at 17812x17812 - exercises density enforcement realistically
-  - Files: `profiling/gen_test_image.rs`, `profiling/bench_die_scale.rs`
+- [x] **P2** Die-scale benchmarks for profiling suite
+  - Separate benchmark group (`cargo bench --bench bench_die_scale`)
+  - 10mm die (~6250px) and 25mm die (~15625px) at sky130 pitch
+  - Benchmarks: greedy_merge_6250, greedy_merge_15625, drc_6250
+  - Files: `profiling/bench_die_scale.rs`, `Cargo.toml`
 
 - [x] **P1** Add LICENSE files, copyright headers, and IIS ETHZ attribution
   - Apache 2.0 LICENSE for software, Solderpad Hardware License v2.1 for PDK configs
@@ -105,12 +122,13 @@
 
 ## Infrastructure
 
-- [ ] **P2** Set up GitHub Pages deployment
+- [x] **P2** Set up GitHub Pages deployment
   - Enable Pages in repo settings: Source = "Deploy from branch", Branch = `main`, Folder = `/docs`
   - `docs/index.html` and `docs/previews/` already committed
 
 ## Completed
 
+- [x] Make touching mode the default, add `--separated` opt-out flag
 - [x] Logo + example gallery + GitHub Pages preview gallery (`58d37bf`)
 - [x] README header redesign with logo and poem
 - [x] Generate SVG/HTML outputs for all input images across PDKs

@@ -160,6 +160,46 @@ For large GreedyMerge rectangles spanning many grid cells, most cells are interi
 
 ---
 
+## Phase 3: Exclusion Mask Rasterization + Neighbor Counting
+
+**Files:** `src/artwork.rs`, `profiling/bench_artwork.rs`
+
+### 3.1 Scan-line Exclusion Mask Rasterization
+
+**Problem:** `apply_exclusion_mask` used per-pixel R-tree queries. For each of the W*H pixels, it queried an R-tree of grown exclusion rects to check for overlap - O(pixels * log(rects)).
+
+**Fix:** Replace with scan-line rasterization. For each exclusion rect, compute the pixel column/row range via inverse coordinate mapping, then use `count_bits_in_range` (for the counter) followed by `bulk_clear_bits` to clear them. Total work is O(total_exclusion_area_in_pixels) - proportional only to the area covered by exclusion rects, not the entire bitmap.
+
+**Helpers added:**
+- `bulk_clear_bits(words, start, len)` - mirrors `bulk_set_bits` from polygon.rs but uses `&= !mask`
+- `count_bits_in_range(words, start, len)` - word-level popcount over a bit range
+
+**Why it matters:** The old approach scanned every pixel in the bitmap and performed a log(N) tree query each time. The new approach only touches pixels inside exclusion zones. For a 2048x2048 bitmap with 256 small exclusion rects, this is orders of magnitude less work.
+
+**Measured:**
+| Size | Rects | Time |
+|---|---|---|
+| 512x512 | 64 | **513 ns** |
+| 2048x2048 | 256 | **2.3 us** |
+
+Also removed `GrownRect` struct, its `RTreeObject` impl, and the `rstar` import from artwork.rs (rstar is still used in drc.rs).
+
+### 3.2 Inlined Neighbor Counting
+
+**Problem:** `count_neighbors` in `enforce_density` called `bitmap.get()` 8 times per pixel. Each call does a bounds check (`x >= width || y >= height`), a multiply (`y * width + x`), a divide (`i / 64`), and a modulo (`i % 64`).
+
+**Fix:** Replaced with direct word access. Pre-compute the bit index for the center pixel, then check each of the 8 neighbors with a single `(words[idx/64] >> (idx%64)) & 1` operation. Outer bounds guards (`x > 0`, `y > 0`, etc.) remain but inner bounds checks are eliminated.
+
+**Measured (end-to-end enforce_density):**
+| Size | Before | After | Improvement |
+|---|---|---|---|
+| 200x200 | 756 us | 562 us | **-25.3%** |
+| 500x500 | 4.76 ms | 3.50 ms | **-26.4%** |
+
+The consistent ~26% improvement shows that `count_neighbors` was a significant fraction of the enforce_density inner loop. Every on-pixel in every violating window has its 8 neighbors counted, so eliminating 8 bounds checks + 8 divides per pixel adds up.
+
+---
+
 ## Die-scale Stress Test: fabbula2 (2nm) GPU Demo
 
 **PDK:** fabbula2 - imaginary 2nm nanosheet PDK (inspired by TSMC N2)

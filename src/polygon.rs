@@ -6,8 +6,8 @@
 //!
 //! Converts an [`ArtworkBitmap`] into a list of
 //! [`Rect`] polygons in database units. Three strategies are available:
-//! [`PolygonStrategy::PixelRects`], [`PolygonStrategy::RowMerge`], and
-//! [`PolygonStrategy::GreedyMerge`].
+//! [`PolygonStrategy::PixelRects`], [`PolygonStrategy::RowMerge`],
+//! [`PolygonStrategy::GreedyMerge`], and [`PolygonStrategy::HistogramMerge`].
 
 use crate::artwork::ArtworkBitmap;
 use crate::pdk::{DrcRules, PdkConfig};
@@ -83,6 +83,9 @@ pub enum PolygonStrategy {
     RowMerge,
     /// Merge into maximal rectangles. Fewest polygons, most complex.
     GreedyMerge,
+    /// Run-matching vertical merge. O(W*H) with no bitset, matches identical horizontal
+    /// runs between adjacent rows for vertical merging.
+    HistogramMerge,
 }
 
 /// Generate DRC-clean polygons from a bitmap using the given PDK rules.
@@ -143,6 +146,9 @@ pub fn generate_polygons(
         PolygonStrategy::RowMerge => row_merged_rects(bitmap, pixel_w_dbu, pitch_dbu, max_merge),
         PolygonStrategy::GreedyMerge => {
             greedy_merged_rects(bitmap, pixel_w_dbu, pitch_dbu, max_merge)
+        }
+        PolygonStrategy::HistogramMerge => {
+            histogram_merged_rects(bitmap, pixel_w_dbu, pitch_dbu, max_merge)
         }
     };
 
@@ -546,6 +552,197 @@ fn greedy_merge_strip_inner(
     rects
 }
 
+/// An open rectangle being tracked for vertical merging.
+#[derive(Clone, Copy)]
+struct OpenRun {
+    x_start: u32,
+    run_len: u16,
+    y_start: u32,
+}
+
+/// Run-matching vertical merge: O(W*H) with no bitset allocation.
+///
+/// For each row, computes horizontal runs and matches them against the previous
+/// row's runs. Identical runs (same x_start, same length) are extended vertically.
+/// Non-matching runs are emitted as completed rectangles.
+fn histogram_merged_rects(
+    bitmap: &ArtworkBitmap,
+    pixel_w: i32,
+    pitch: i32,
+    max_merge: u16,
+) -> Vec<Rect> {
+    let w = bitmap.width as usize;
+    let h = bitmap.height as usize;
+    let total = w * h;
+
+    if total >= PARALLEL_PIXEL_THRESHOLD && h > STRIP_HEIGHT {
+        return histogram_merge_parallel_strips(bitmap, pixel_w, pitch, max_merge);
+    }
+
+    histogram_merge_strip(bitmap, 0, h, pixel_w, pitch, max_merge)
+}
+
+/// Parallel strip-based histogram merge.
+fn histogram_merge_parallel_strips(
+    bitmap: &ArtworkBitmap,
+    pixel_w: i32,
+    pitch: i32,
+    max_merge: u16,
+) -> Vec<Rect> {
+    let h = bitmap.height as usize;
+    let num_strips = h.div_ceil(STRIP_HEIGHT);
+
+    (0..num_strips)
+        .into_par_iter()
+        .flat_map_iter(|strip_idx| {
+            let y_start = strip_idx * STRIP_HEIGHT;
+            let y_end = (y_start + STRIP_HEIGHT).min(h);
+            let strip_h = y_end - y_start;
+            histogram_merge_strip(bitmap, y_start, strip_h, pixel_w, pitch, max_merge)
+        })
+        .collect()
+}
+
+/// Histogram merge within a single horizontal strip.
+fn histogram_merge_strip(
+    bitmap: &ArtworkBitmap,
+    y_start: usize,
+    strip_h: usize,
+    pixel_w: i32,
+    pitch: i32,
+    max_merge: u16,
+) -> Vec<Rect> {
+    let w = bitmap.width as usize;
+    let total_h = bitmap.height as usize;
+    let words = bitmap.words();
+    let max_h = max_merge as u32;
+
+    let mut rects = Vec::new();
+    // Double-buffered run lists to avoid per-row allocation
+    let mut prev: Vec<OpenRun> = Vec::new();
+    let mut curr_runs: Vec<(u32, u16)> = Vec::new();
+    let mut next: Vec<OpenRun> = Vec::new();
+
+    for sy in 0..strip_h {
+        let gy = y_start + sy;
+
+        // Compute horizontal runs for this row
+        curr_runs.clear();
+        let row_start = gy * w;
+        let mut run_start: Option<u32> = None;
+        let mut run_len: u16 = 0;
+
+        for x in 0..=w {
+            let on = x < w && {
+                let bit_idx = row_start + x;
+                words[bit_idx / 64] & (1u64 << (bit_idx % 64)) != 0
+            };
+
+            match (on, run_start) {
+                (true, None) => {
+                    run_start = Some(x as u32);
+                    run_len = 1;
+                }
+                (true, Some(start)) if run_len >= max_merge => {
+                    curr_runs.push((start, run_len));
+                    run_start = Some(x as u32);
+                    run_len = 1;
+                }
+                (true, Some(_)) => {
+                    run_len += 1;
+                }
+                (false, Some(start)) => {
+                    curr_runs.push((start, run_len));
+                    run_start = None;
+                }
+                _ => {}
+            }
+        }
+
+        // Merge-match prev runs with curr runs
+        next.clear();
+        let mut pi = 0;
+        let mut ci = 0;
+
+        while pi < prev.len() && ci < curr_runs.len() {
+            let p = prev[pi];
+            let (cx, cw) = curr_runs[ci];
+
+            if p.x_start == cx && p.run_len == cw && (gy as u32 - p.y_start) < max_h {
+                // Matching run: extend vertically
+                next.push(p);
+                pi += 1;
+                ci += 1;
+            } else if p.x_start < cx || (p.x_start == cx && (p.run_len as u32) < cw as u32) {
+                // Previous run not matched: emit it
+                emit_histogram_rect(&mut rects, &p, gy as u32 - 1, total_h, pixel_w, pitch);
+                pi += 1;
+            } else {
+                // Current run is new
+                next.push(OpenRun {
+                    x_start: cx,
+                    run_len: cw,
+                    y_start: gy as u32,
+                });
+                ci += 1;
+            }
+        }
+
+        // Emit remaining unmatched previous runs
+        while pi < prev.len() {
+            emit_histogram_rect(
+                &mut rects,
+                &prev[pi],
+                gy as u32 - 1,
+                total_h,
+                pixel_w,
+                pitch,
+            );
+            pi += 1;
+        }
+
+        // Start tracking remaining new current runs
+        while ci < curr_runs.len() {
+            let (cx, cw) = curr_runs[ci];
+            next.push(OpenRun {
+                x_start: cx,
+                run_len: cw,
+                y_start: gy as u32,
+            });
+            ci += 1;
+        }
+
+        std::mem::swap(&mut prev, &mut next);
+    }
+
+    // Emit any remaining open rectangles
+    let y_end = (y_start + strip_h) as u32;
+    for p in &prev {
+        emit_histogram_rect(&mut rects, p, y_end - 1, total_h, pixel_w, pitch);
+    }
+
+    rects
+}
+
+/// Emit a rectangle from an open run that ended at row y_end (inclusive).
+#[inline]
+fn emit_histogram_rect(
+    rects: &mut Vec<Rect>,
+    run: &OpenRun,
+    y_end: u32,
+    total_h: usize,
+    pixel_w: i32,
+    pitch: i32,
+) {
+    let x0 = run.x_start as i32 * pitch;
+    let x1 = (run.x_start as i32 + run.run_len as i32 - 1) * pitch + pixel_w;
+    let y_flipped_top = (total_h as i32 - 1) - run.y_start as i32;
+    let y_flipped_bot = (total_h as i32 - 1) - y_end as i32;
+    let y0 = y_flipped_bot * pitch;
+    let y1 = y_flipped_top * pitch + pixel_w;
+    rects.push(Rect::new(x0, y0, x1, y1));
+}
+
 /// Compute bounding box of all polygons
 pub fn bounding_box(rects: &[Rect]) -> Option<Rect> {
     let first = *rects.first()?;
@@ -586,6 +783,66 @@ mod tests {
         let rects = greedy_merged_rects(&bmp, 100, 100, u16::MAX);
         // Should produce a single rectangle
         assert_eq!(rects.len(), 1);
+    }
+
+    #[test]
+    fn test_histogram_merge_solid() {
+        let bmp = ArtworkBitmap::from_bools(3, 3, &[true; 9]);
+        let rects = histogram_merged_rects(&bmp, 100, 100, u16::MAX);
+        // Should produce a single rectangle
+        assert_eq!(rects.len(), 1);
+    }
+
+    #[test]
+    fn test_histogram_merge_basic() {
+        let bmp = test_bitmap();
+        let rects = histogram_merged_rects(&bmp, 100, 200, u16::MAX);
+        // Row 0: run at (0,3), Row 1: run at (1,3) - different x_start, so 2 rects
+        assert_eq!(rects.len(), 2);
+    }
+
+    #[test]
+    fn test_histogram_merge_max_merge() {
+        let bmp = ArtworkBitmap::from_bools(4, 4, &[true; 16]);
+        let rects = histogram_merged_rects(&bmp, 100, 100, 2);
+        for r in &rects {
+            assert!(r.width() <= 200, "rect too wide: {}", r.width());
+            assert!(r.height() <= 200, "rect too tall: {}", r.height());
+        }
+        let total_pixels: i64 = rects.iter().map(|r| r.area() / (100 * 100)).sum();
+        assert_eq!(total_pixels, 16);
+    }
+
+    #[test]
+    fn test_histogram_merge_l_shape() {
+        let bmp = ArtworkBitmap::from_bools(
+            4,
+            4,
+            &[
+                true, false, false, false, true, false, false, false, true, true, true, true,
+                false, false, false, false,
+            ],
+        );
+        let rects = histogram_merged_rects(&bmp, 100, 100, u16::MAX);
+        let total_pixels: i64 = rects.iter().map(|r| r.area() / (100 * 100)).sum();
+        assert_eq!(total_pixels, 6);
+    }
+
+    #[test]
+    fn test_histogram_merge_large_pattern() {
+        let size = 128u32;
+        let bools: Vec<bool> = (0..size * size)
+            .map(|i| {
+                let x = i % size;
+                let y = i / size;
+                !(x + y).is_multiple_of(5)
+            })
+            .collect();
+        let bmp = ArtworkBitmap::from_bools(size, size, &bools);
+        let rects = histogram_merged_rects(&bmp, 10, 10, u16::MAX);
+        let expected_on = bools.iter().filter(|&&b| b).count();
+        let total_pixels: i64 = rects.iter().map(|r| r.area() / (10 * 10)).sum();
+        assert_eq!(total_pixels as usize, expected_on);
     }
 
     #[test]

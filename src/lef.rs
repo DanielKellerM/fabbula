@@ -26,9 +26,14 @@ pub fn write_lef_multi(
     cell_name: &str,
     output: &Path,
 ) -> Result<()> {
-    let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
-    let bb = if let Some(bb) = bounding_box_refs(&all_rects) {
-        bb
+    let mut all_rects = layers.iter().flat_map(|l| l.rects.iter());
+    let bb = if let Some(&first) = all_rects.next() {
+        all_rects.fold(first, |bb, r| Rect {
+            x0: bb.x0.min(r.x0),
+            y0: bb.y0.min(r.y0),
+            x1: bb.x1.max(r.x1),
+            y1: bb.y1.max(r.y1),
+        })
     } else {
         Rect::new(0, 0, 0, 0)
     };
@@ -81,16 +86,6 @@ pub fn write_lef(rects: &[Rect], pdk: &PdkConfig, cell_name: &str, output: &Path
         cell_name,
         output,
     )
-}
-
-fn bounding_box_refs(rects: &[&Rect]) -> Option<Rect> {
-    let first = **rects.first()?;
-    Some(rects[1..].iter().fold(first, |bb, r| Rect {
-        x0: bb.x0.min(r.x0),
-        y0: bb.y0.min(r.y0),
-        x1: bb.x1.max(r.x1),
-        y1: bb.y1.max(r.y1),
-    }))
 }
 
 #[cfg(test)]

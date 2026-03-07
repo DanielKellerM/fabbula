@@ -18,26 +18,29 @@ pub const DEFAULT_LAYER_COLORS: &[&str] = &[
     "#c0c0c0", "#e8a87c", "#85cdca", "#d5a6bd", "#a8d8ea", "#f6c85f",
 ];
 
+/// Multi-layer entry for SVG preview
+pub struct SvgLayer<'a> {
+    pub rects: &'a [Rect],
+    pub color: &'a str,
+}
+
 /// Write a multi-layer SVG preview.
-///
-/// Each entry in `layers` is `(rects, fill_color)`.
 pub fn write_svg_multi(
-    layers: &[(&[Rect], &str)],
+    layers: &[SvgLayer],
     output: &Path,
     scale: f64,
     background: Option<&str>,
 ) -> Result<()> {
-    let all_rects: Vec<&Rect> = layers.iter().flat_map(|(r, _)| r.iter()).collect();
-    let bb = if all_rects.is_empty() {
-        Rect::new(0, 0, 1000, 1000)
-    } else {
-        let first = *all_rects[0];
-        all_rects[1..].iter().fold(first, |bb, r| Rect {
+    let mut all_rects = layers.iter().flat_map(|l| l.rects.iter());
+    let bb = if let Some(&first) = all_rects.next() {
+        all_rects.fold(first, |bb, r| Rect {
             x0: bb.x0.min(r.x0),
             y0: bb.y0.min(r.y0),
             x1: bb.x1.max(r.x1),
             y1: bb.y1.max(r.y1),
         })
+    } else {
+        Rect::new(0, 0, 1000, 1000)
     };
 
     let margin = ((bb.width().max(bb.height())) as f64 * 0.02) as i32;
@@ -76,8 +79,8 @@ pub fn write_svg_multi(
         vb_y * 2 + vb_h
     )?;
 
-    for (rects, fill_color) in layers {
-        for rect in *rects {
+    for layer in layers {
+        for rect in layer.rects {
             writeln!(
                 f,
                 r#"    <rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
@@ -85,7 +88,7 @@ pub fn write_svg_multi(
                 rect.y0,
                 rect.width(),
                 rect.height(),
-                fill_color
+                layer.color
             )?;
         }
     }
@@ -111,7 +114,15 @@ pub fn write_svg(
     fill_color: &str,
     background: Option<&str>,
 ) -> Result<()> {
-    write_svg_multi(&[(rects, fill_color)], output, scale, background)
+    write_svg_multi(
+        &[SvgLayer {
+            rects,
+            color: fill_color,
+        }],
+        output,
+        scale,
+        background,
+    )
 }
 
 /// Multi-layer entry for HTML preview
@@ -127,20 +138,19 @@ pub fn write_html_preview_multi(
     output: &Path,
     pdk: &PdkConfig,
 ) -> Result<()> {
-    let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
-    let bb = if all_rects.is_empty() {
-        Rect::new(0, 0, 1000, 1000)
-    } else {
-        let first = *all_rects[0];
-        all_rects[1..].iter().fold(first, |bb, r| Rect {
+    let mut all_rects = layers.iter().flat_map(|l| l.rects.iter());
+    let bb = if let Some(&first) = all_rects.next() {
+        all_rects.fold(first, |bb, r| Rect {
             x0: bb.x0.min(r.x0),
             y0: bb.y0.min(r.y0),
             x1: bb.x1.max(r.x1),
             y1: bb.y1.max(r.y1),
         })
+    } else {
+        Rect::new(0, 0, 1000, 1000)
     };
     let total_polys: usize = layers.iter().map(|l| l.rects.len()).sum();
-    write_html_preview_inner(&all_rects, layers, &bb, total_polys, output, pdk)
+    write_html_preview_inner(layers, &bb, total_polys, output, pdk)
 }
 
 /// Write a self-contained interactive HTML preview (single layer).
@@ -154,7 +164,6 @@ pub fn write_html_preview(rects: &[Rect], output: &Path, pdk: &PdkConfig) -> Res
 }
 
 fn write_html_preview_inner(
-    _all_rects: &[&Rect],
     layers: &[HtmlLayer],
     bb: &Rect,
     total_polys: usize,
