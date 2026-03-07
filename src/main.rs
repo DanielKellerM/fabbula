@@ -17,8 +17,10 @@ use fabbula::lef::{LefLayer, write_lef_multi};
 use fabbula::pdk::{ArtworkLayerProfile, DrcRules, PdkConfig};
 use fabbula::polygon::{PolygonStrategy, Rect, bounding_box, generate_polygons};
 use fabbula::preview::{
-    DEFAULT_LAYER_COLORS, HtmlLayer, SvgLayer, write_html_preview_multi, write_svg_multi,
+    DEFAULT_LAYER_COLORS, HtmlLayer, SvgLayer, write_deep_zoom_preview, write_html_preview_multi,
+    write_svg_multi,
 };
+use fabbula::tiles::{TileConfig, TileLayer, generate_tile_pyramid, parse_hex_color};
 
 #[derive(Parser)]
 #[command(
@@ -134,6 +136,14 @@ enum Commands {
         /// Number of palette colors (for palette mode; defaults to number of artwork layers)
         #[arg(long)]
         num_colors: Option<usize>,
+
+        /// Generate deep zoom tile pyramid for HTML preview (requires --html)
+        #[arg(long)]
+        deep_zoom: bool,
+
+        /// Max resolution for deep zoom tile pyramid in pixels (default 4096)
+        #[arg(long, default_value = "4096")]
+        tile_resolution: u32,
     },
 
     /// Merge artwork into an existing GDSII chip file
@@ -557,6 +567,8 @@ fn main() -> Result<()> {
             dither,
             color_mode,
             num_colors,
+            deep_zoom,
+            tile_resolution,
         } => {
             let pdk = load_pdk(&pdk)?;
             let strategy: PolygonStrategy = strategy.into();
@@ -719,7 +731,49 @@ fn main() -> Result<()> {
                         color: DEFAULT_LAYER_COLORS[i % DEFAULT_LAYER_COLORS.len()],
                     })
                     .collect();
-                write_html_preview_multi(&html_layers, &html_path, &pdk)?;
+
+                if deep_zoom {
+                    // Generate tile pyramid
+                    let tile_dir = html_path.with_extension("").with_file_name(format!(
+                        "{}_tiles",
+                        html_path.file_stem().unwrap_or_default().to_string_lossy()
+                    ));
+                    // Place tile_dir next to html file
+                    let tile_dir = html_path
+                        .parent()
+                        .unwrap_or(Path::new("."))
+                        .join(tile_dir.file_name().unwrap());
+                    std::fs::create_dir_all(&tile_dir)?;
+
+                    let bb = bounding_box(
+                        &layer_results
+                            .iter()
+                            .flat_map(|(r, _)| r.iter().copied())
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap_or(Rect::new(0, 0, 1000, 1000));
+
+                    let tile_layers: Vec<TileLayer> = layer_results
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (rects, profile))| TileLayer {
+                            rects,
+                            color: parse_hex_color(
+                                DEFAULT_LAYER_COLORS[i % DEFAULT_LAYER_COLORS.len()],
+                            ),
+                            name: &profile.name,
+                        })
+                        .collect();
+
+                    let config = TileConfig {
+                        tile_size: 256,
+                        max_resolution: tile_resolution,
+                    };
+                    generate_tile_pyramid(&tile_layers, &bb, &config, &tile_dir)?;
+                    write_deep_zoom_preview(&html_layers, &html_path, &pdk, &tile_dir)?;
+                } else {
+                    write_html_preview_multi(&html_layers, &html_path, &pdk)?;
+                }
             }
 
             tracing::info!("Done! Output: {}", output.display());

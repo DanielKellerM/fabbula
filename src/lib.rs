@@ -48,6 +48,7 @@
 //! - [`pdk`] - PDK configuration loading and built-in PDK support
 //! - [`polygon`] - Bitmap-to-rectangle conversion strategies
 //! - [`preview`] - SVG and interactive HTML preview generation
+//! - [`tiles`] - Tile pyramid generation for deep zoom previews
 
 pub mod artwork;
 pub mod color;
@@ -57,3 +58,4 @@ pub mod lef;
 pub mod pdk;
 pub mod polygon;
 pub mod preview;
+pub mod tiles;

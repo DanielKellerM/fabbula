@@ -13,6 +13,13 @@
 
 ## In Progress
 
+- [x] **P1** Tile-based deep zoom previews
+  - Google Maps-style deep zoom: PNG tile pyramid at overview, SVG polygons when zoomed in
+  - `src/tiles.rs`: tile pyramid generation via tiny_skia, density grid, polygon JSON
+  - `src/preview.rs`: deep zoom HTML viewer with canvas tile renderer + SVG overlay
+  - `src/main.rs`: `--deep-zoom` CLI flag for Generate and Merge commands
+  - Files: `src/tiles.rs`, `src/preview.rs`, `src/main.rs`, `src/lib.rs`, `docs/index.html`
+
 - [x] **P0** Audit fixes - competitive analysis and usability review
   - A1: Fix wide_metal_spacing in pitch calculation (DRC-by-construction bug)
   - A2: Fix README to describe actual pipeline (not fake vectorization)
