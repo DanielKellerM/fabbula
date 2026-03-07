@@ -141,6 +141,105 @@
   - Enable Pages in repo settings: Source = "Deploy from branch", Branch = `main`, Folder = `/docs`
   - `docs/index.html` and `docs/previews/` already committed
 
+## Open-Source Readiness
+
+### P0 - Correctness
+
+- [ ] **P0** `min_enclosed_area` loaded but never checked
+  - Field is deserialized from TOML (`pdk.rs:50`) and appears in test structs, but no DRC check in `drc.rs` uses it
+  - Dead code that implies a check exists when it doesn't
+  - Either implement the check or remove the field and document it as unsupported
+  - Files: `src/drc.rs`, `src/pdk.rs`
+
+- [ ] **P0** Path bbox expansion over-expands in path direction
+  - `gdsio.rs:365-376`: `half_w` is applied to all vertices' x AND y coordinates uniformly
+  - A horizontal path (0,0)-(100,0) with width 40 should produce bbox (0,-20,100,20) but produces (-20,-20,120,20)
+  - Creates larger exclusion zones than necessary during merge
+  - Files: `src/gdsio.rs`
+
+- [ ] **P0** LEF output is bounding-box only, not real geometry
+  - `lef.rs:59`: writes a single RECT covering the full artwork bounding box per layer
+  - Router sees one giant obstacle instead of the actual artwork shape
+  - OpenLane integration claim in README is misleading - LEF won't allow routing through gaps
+  - Either fix to emit actual polygon geometry or clarify the limitation in README
+  - Files: `src/lef.rs`, `README.md`
+
+### P1 - Robustness
+
+- [ ] **P1** No image size guard
+  - A 100k x 100k all-black image produces 10 billion pixels and potentially millions of polygons
+  - No maximum image dimension or polygon count limit; could OOM or hang
+  - Add a configurable max dimension (e.g. 10000px default) with `--max-pixels` override
+  - Files: `src/artwork.rs`, `src/main.rs`
+
+- [ ] **P1** No PDK cross-field validation
+  - `density_min` not validated to be < `density_max`
+  - `min_area` and `min_enclosed_area` not validated as non-negative
+  - No check that `db_units_per_um > 0`
+  - Add validation in `PdkConfig::load()` or a dedicated `validate()` method
+  - Files: `src/pdk.rs`
+
+- [ ] **P1** Temp file handling in gdsio.rs uses PID-based naming
+  - `gdsio.rs:29-44`: uses `format!("fabbula_decompress_{}.gds", std::process::id())` instead of `tempfile::NamedTempFile`
+  - PID-based naming can collide; file persists on early error
+  - Replace with `tempfile` crate for safe temp file handling
+  - Files: `src/gdsio.rs`, `Cargo.toml`
+
+- [ ] **P1** GDS coordinate overflow for large designs
+  - i32 coordinates at 1000 DBU/um overflow at ~2.1mm
+  - A 10mm chip at 1nm DBU (1M DBU/um) overflows i32 with no warning
+  - Add overflow check when computing coordinates, warn or error if exceeded
+  - Files: `src/polygon.rs`, `src/pdk.rs`
+
+- [ ] **P1** No end-to-end CLI tests
+  - No test runs `fabbula generate` or `fabbula merge` with a real image and validates output GDS
+  - Add integration tests that exercise full CLI pipeline
+  - Files: `tests/`
+
+### P2 - Improvements
+
+- [ ] **P2** No rotation/flip support
+  - Artwork must be pre-oriented in the input image
+  - Add `--rotate` (0/90/180/270) and `--flip` (horizontal/vertical) CLI flags
+  - Files: `src/artwork.rs`, `src/main.rs`
+
+- [ ] **P2** Single-layer artwork per invocation
+  - Can't natively produce multi-metal-height artwork (e.g. met4 + met5 aligned)
+  - Color modes put different colors on different layers, but can't specify arbitrary layer targets
+  - Files: `src/main.rs`, `src/pdk.rs`
+
+- [ ] **P2** No CI matrix for cross-platform or MSRV testing
+  - Only tests on ubuntu-latest with one Rust version
+  - Add macOS and Windows runners, test against MSRV (1.93)
+  - Files: `.github/workflows/ci.yml`
+
+- [ ] **P2** No `cargo audit` in CI
+  - No security/dependency vulnerability scanning
+  - Add `cargo audit` step to CI pipeline
+  - Files: `.github/workflows/ci.yml` or new workflow
+
+- [ ] **P2** max_width enforced by splitting, not slotting
+  - GF180MCU has `max_width=30.0` per DRM 14.6.3 which requires slotting (holes in wide metal)
+  - Current impl splits wide rects into smaller ones during merge, but doesn't create real slots
+  - Document limitation or implement basic slotting
+  - Files: `src/polygon.rs`, docs
+
+- [ ] **P2** Density enforcement can fail silently
+  - If the density loop doesn't converge after 3 retries, it warns but continues
+  - User might tapeout with density violations without realizing
+  - Consider making non-convergence an error (with `--force` override)
+  - Files: `src/artwork.rs`
+
+- [ ] **P2** Document which DRC rules are and aren't checked
+  - No enclosure, antenna, via, acute angle, off-grid, or same-net spacing checks
+  - Expected for an artwork tool, but README should explicitly list supported vs unsupported checks
+  - Files: `README.md`
+
+- [ ] **P2** Clarify LEF output limitations in README
+  - Roadmap shows LEF output as complete, but it's bounding-box only
+  - Either improve or clearly document the limitation
+  - Files: `README.md`
+
 ## Completed
 
 - [x] Make touching mode the default, add `--separated` opt-out flag
