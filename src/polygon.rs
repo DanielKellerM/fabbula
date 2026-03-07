@@ -99,7 +99,7 @@ pub enum PolygonStrategy {
 /// For denser output (touching polygons), set `touching = true`:
 /// - Adjacent "on" pixels produce touching/merged rectangles
 /// - Gaps only appear where the bitmap has "off" pixels
-/// - min_spacing is only guaranteed between non-adjacent metal regions
+/// - Pitch = max(min_width, effective_spacing) ensures min_spacing is satisfied
 pub fn generate_polygons(
     bitmap: &ArtworkBitmap,
     pdk: &PdkConfig,
@@ -110,14 +110,17 @@ pub fn generate_polygons(
     let min_w_um = pdk.snap_to_grid(drc.min_width);
     let eff_s_um = pdk.snap_to_grid(drc.effective_spacing());
 
-    // Pixel pitch: how far apart pixel centers are
+    // Pixel pitch and width. In touching mode, pitch = max(min_width, effective_spacing)
+    // so gaps between separate features (OFF pixels) satisfy spacing rules. Pixel width
+    // equals pitch so adjacent ON pixels always touch (no sub-spacing gaps).
     let pitch_um = if touching {
-        min_w_um // pixels touch: pitch = width
+        min_w_um.max(eff_s_um)
     } else {
         min_w_um + eff_s_um // pixels separated: guaranteed spacing
     };
+    let pixel_w_um = if touching { pitch_um } else { min_w_um };
 
-    let pixel_w_dbu = pdk.um_to_dbu(min_w_um);
+    let pixel_w_dbu = pdk.um_to_dbu(pixel_w_um);
     let pitch_dbu = pdk.um_to_dbu(pitch_um);
 
     // Max pixels a merged rect can span before exceeding max_width.
@@ -129,6 +132,17 @@ pub fn generate_polygons(
     } else {
         u16::MAX
     };
+
+    // Check for coordinate overflow: max coordinate = (dimension - 1) * pitch + pixel_w
+    let max_x = (bitmap.width as i64 - 1) * pitch_dbu as i64 + pixel_w_dbu as i64;
+    let max_y = (bitmap.height as i64 - 1) * pitch_dbu as i64 + pixel_w_dbu as i64;
+    anyhow::ensure!(
+        max_x <= i32::MAX as i64 && max_y <= i32::MAX as i64,
+        "GDS coordinate overflow: artwork extent ({} x {} dbu) exceeds i32 range. \
+         Reduce image size or use a PDK with coarser grid.",
+        max_x,
+        max_y
+    );
 
     tracing::info!(
         "Generating polygons: pixel={}um, spacing={}um, pitch={}um ({} dbu), strategy={:?}, touching={}, max_merge={}",
@@ -152,16 +166,28 @@ pub fn generate_polygons(
         }
     };
 
-    // Filter out polygons that violate min_area
-    let min_area_dbu2 = pdk.um_to_dbu(drc.min_area.sqrt()).pow(2) as i64;
-    let filtered: Vec<Rect> = if drc.min_area > 0.0 {
-        raw_rects
+    // Filter out polygons that violate min_area (direct um^2 -> dbu^2 conversion)
+    let dbu_per_um = pdk.pdk.db_units_per_um as f64;
+    let min_area_dbu2 = (drc.min_area * dbu_per_um * dbu_per_um) as i64;
+    let (filtered, removed) = if drc.min_area > 0.0 {
+        let before = raw_rects.len();
+        let kept: Vec<Rect> = raw_rects
             .into_iter()
             .filter(|r| r.area() >= min_area_dbu2)
-            .collect()
+            .collect();
+        let removed = before - kept.len();
+        (kept, removed)
     } else {
-        raw_rects
+        (raw_rects, 0)
     };
+    if removed > 0 {
+        tracing::warn!(
+            "Min-area filter removed {} of {} rects ({:.1}%)",
+            removed,
+            removed + filtered.len(),
+            removed as f64 / (removed + filtered.len()) as f64 * 100.0
+        );
+    }
 
     tracing::info!("Generated {} polygons", filtered.len());
     Ok(filtered)

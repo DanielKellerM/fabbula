@@ -47,7 +47,13 @@ pub fn write_lef_multi(
     writeln!(f, "  OBS")?;
     for layer in layers {
         writeln!(f, "    LAYER {} ;", layer.layer_name)?;
-        writeln!(f, "      RECT 0.000 0.000 {width_um:.3} {height_um:.3} ;")?;
+        for r in layer.rects {
+            let rx0 = (r.x0 - bb.x0) as f64 / dbu;
+            let ry0 = (r.y0 - bb.y0) as f64 / dbu;
+            let rx1 = (r.x1 - bb.x0) as f64 / dbu;
+            let ry1 = (r.y1 - bb.y0) as f64 / dbu;
+            writeln!(f, "      RECT {rx0:.3} {ry0:.3} {rx1:.3} {ry1:.3} ;")?;
+        }
     }
     writeln!(f, "  END")?;
     writeln!(f, "END {cell_name}")?;
@@ -94,9 +100,12 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("MACRO test_art"));
         assert!(content.contains("CLASS BLOCK"));
-        assert!(content.contains("SIZE"));
+        assert!(content.contains("SIZE 3.000 BY 1.000"));
         assert!(content.contains("OBS"));
         assert!(content.contains(&pdk.artwork_layer.name));
+        // Actual rect geometry, not bounding box
+        assert!(content.contains("RECT 0.000 0.000 1.000 1.000"));
+        assert!(content.contains("RECT 2.000 0.000 3.000 1.000"));
         assert!(content.contains("END test_art"));
         assert!(content.contains("END LIBRARY"));
     }

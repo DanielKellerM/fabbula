@@ -32,7 +32,7 @@ fabbula converts images (PNG, SVG, etc.) into GDSII layout data suitable
 for embedding as artwork on top-metal layers of integrated circuits.
 
 Unlike other tools, fabbula:
-  • Supports multiple open PDKs (SKY130, IHP SG13G2, GF180MCU)
+  • 6 built-in PDKs (SKY130, IHP SG13G2, GF180MCU, FreePDK45, ASAP7, fabbula2) + custom TOML
   • Generates DRC-clean output by construction
   • Uses efficient polygon merging strategies
   • Is written in Rust for speed and correctness
@@ -276,6 +276,23 @@ fn most_conservative_drc(profiles: &[ArtworkLayerProfile]) -> DrcRules {
         drc.min_width = drc.min_width.max(p.drc.min_width);
         drc.min_spacing = drc.min_spacing.max(p.drc.min_spacing);
         drc.min_area = drc.min_area.max(p.drc.min_area);
+        // Take the smallest max_width (most restrictive)
+        match (drc.max_width, p.drc.max_width) {
+            (Some(a), Some(b)) => drc.max_width = Some(a.min(b)),
+            (None, Some(b)) => drc.max_width = Some(b),
+            _ => {}
+        }
+        // Take the largest wide_metal values (most conservative)
+        match (drc.wide_metal_threshold, p.drc.wide_metal_threshold) {
+            (Some(a), Some(b)) => drc.wide_metal_threshold = Some(a.min(b)),
+            (None, Some(b)) => drc.wide_metal_threshold = Some(b),
+            _ => {}
+        }
+        match (drc.wide_metal_spacing, p.drc.wide_metal_spacing) {
+            (Some(a), Some(b)) => drc.wide_metal_spacing = Some(a.max(b)),
+            (None, Some(b)) => drc.wide_metal_spacing = Some(b),
+            _ => {}
+        }
     }
     drc
 }
@@ -288,15 +305,18 @@ fn load_pdk(name_or_path: &str) -> Result<PdkConfig> {
     }
 }
 
-fn parse_threshold(s: &str) -> ThresholdMode {
+fn parse_threshold(s: &str) -> Result<ThresholdMode> {
     if s.eq_ignore_ascii_case("otsu") {
-        ThresholdMode::Otsu
+        Ok(ThresholdMode::Otsu)
     } else if s.eq_ignore_ascii_case("alpha") {
-        ThresholdMode::Alpha(128)
+        Ok(ThresholdMode::Alpha(128))
     } else if let Ok(v) = s.parse::<u8>() {
-        ThresholdMode::Luminance(v)
+        Ok(ThresholdMode::Luminance(v))
     } else {
-        ThresholdMode::Luminance(128)
+        anyhow::bail!(
+            "Invalid threshold '{}': expected 'otsu', 'alpha', or a number 0-255",
+            s
+        )
     }
 }
 
@@ -349,7 +369,7 @@ fn prepare_bitmap(
     invert: bool,
     dither: bool,
 ) -> Result<ArtworkBitmap> {
-    let thresh = parse_threshold(threshold);
+    let thresh = parse_threshold(threshold)?;
     let max_px = match (max_width, max_height) {
         (Some(w), Some(h)) => Some((w, h)),
         (Some(w), None) => Some((w, w)),
@@ -488,6 +508,14 @@ fn density_prepass(bitmap: &mut ArtworkBitmap, pdk: &PdkConfig, drc: &DrcRules, 
         min_w_um + eff_s_um
     };
     let window_px = (drc.density_window_um / pitch_um).floor() as u32;
+    if window_px == 0 {
+        tracing::warn!(
+            "Density window ({:.1} um) is smaller than pixel pitch ({:.1} um), \
+             skipping density enforcement",
+            drc.density_window_um,
+            pitch_um
+        );
+    }
     if window_px > 0 {
         let cleared = enforce_density(bitmap, drc.density_max, window_px);
         if cleared > 0 {
@@ -595,7 +623,7 @@ fn main() -> Result<()> {
                 (None, Some(h)) => Some((h, h)),
                 (None, None) => None,
             };
-            let thresh = parse_threshold(&threshold);
+            let thresh = parse_threshold(&threshold)?;
 
             // Collect per-layer rects and profile references
             let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
@@ -649,6 +677,13 @@ fn main() -> Result<()> {
                     // Use the most conservative pitch so all layers align spatially
                     let shared_drc = most_conservative_drc(&profiles);
                     let n = num_colors.unwrap_or(profiles.len());
+                    anyhow::ensure!(
+                        n <= profiles.len(),
+                        "num_colors ({}) exceeds available artwork layer profiles ({}); \
+                         add more [[artwork_layers]] to your PDK or reduce --num-colors",
+                        n,
+                        profiles.len()
+                    );
                     let layer_bitmaps = extract_palette(&input, n, max_px)?;
                     for LayerBitmap {
                         mut bitmap,
@@ -658,7 +693,7 @@ fn main() -> Result<()> {
                         if invert {
                             bitmap.invert();
                         }
-                        let profile = profiles.get(layer_index).unwrap_or(&profiles[0]);
+                        let profile = &profiles[layer_index];
                         let rects = generate_layer_polygons(
                             &mut bitmap,
                             &pdk,
@@ -826,7 +861,7 @@ fn main() -> Result<()> {
                 (None, Some(h)) => Some((h, h)),
                 (None, None) => None,
             };
-            let thresh = parse_threshold(&threshold);
+            let thresh = parse_threshold(&threshold)?;
 
             let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
 
@@ -901,6 +936,13 @@ fn main() -> Result<()> {
                 ColorModeArg::Palette => {
                     let shared_drc = most_conservative_drc(&profiles);
                     let n = num_colors.unwrap_or(profiles.len());
+                    anyhow::ensure!(
+                        n <= profiles.len(),
+                        "num_colors ({}) exceeds available artwork layer profiles ({}); \
+                         add more [[artwork_layers]] to your PDK or reduce --num-colors",
+                        n,
+                        profiles.len()
+                    );
                     let layer_bitmaps = extract_palette(&input, n, max_px)?;
                     for LayerBitmap {
                         mut bitmap,
@@ -916,7 +958,7 @@ fn main() -> Result<()> {
                             let margin_dbu = pdk.um_to_dbu(margin_um);
                             apply_exclusion_mask(&mut bitmap, existing, &pdk, margin_dbu);
                         }
-                        let profile = profiles.get(layer_index).unwrap_or(&profiles[0]);
+                        let profile = &profiles[layer_index];
                         let rects = generate_layer_polygons(
                             &mut bitmap,
                             &pdk,

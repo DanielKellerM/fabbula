@@ -44,6 +44,9 @@ rstar = "0.12"
 # Gzip decompression for compressed GDS files
 flate2 = "1"
 
+# Temp file handling for GDS decompression
+tempfile = "3"
+
 # SVG rasterization (pure Rust)
 resvg = "0.45"
 

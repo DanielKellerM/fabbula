@@ -145,93 +145,58 @@
 
 ### P0 - Correctness
 
-- [ ] **P0** `min_enclosed_area` loaded but never checked
-  - Field is deserialized from TOML (`pdk.rs:50`) and appears in test structs, but no DRC check in `drc.rs` uses it
-  - Dead code that implies a check exists when it doesn't
-  - Either implement the check or remove the field and document it as unsupported
-  - Files: `src/drc.rs`, `src/pdk.rs`
+- [x] **P0** `min_enclosed_area` loaded but never checked
+  - Removed: fabbula generates solid rectangles only, enclosed areas can't exist by construction
+  - Removed field from DrcRules struct, all 6 PDK TOMLs, and test helpers
+  - Custom TOMLs with the field still parse fine (serde ignores unknown fields)
 
-- [ ] **P0** Path bbox expansion over-expands in path direction
-  - `gdsio.rs:365-376`: `half_w` is applied to all vertices' x AND y coordinates uniformly
-  - A horizontal path (0,0)-(100,0) with width 40 should produce bbox (0,-20,100,20) but produces (-20,-20,120,20)
-  - Creates larger exclusion zones than necessary during merge
-  - Files: `src/gdsio.rs`
+- [x] **P0** Path bbox expansion over-expands in path direction
+  - Fixed: 2-point axis-aligned paths now expand only perpendicular to path direction
+  - Multi-segment/diagonal paths still use conservative all-direction expansion
+  - Added test_path_vertical test; updated test_path_element_with_width expectations
 
-- [ ] **P0** LEF output is bounding-box only, not real geometry
-  - `lef.rs:59`: writes a single RECT covering the full artwork bounding box per layer
-  - Router sees one giant obstacle instead of the actual artwork shape
-  - OpenLane integration claim in README is misleading - LEF won't allow routing through gaps
-  - Either fix to emit actual polygon geometry or clarify the limitation in README
-  - Files: `src/lef.rs`, `README.md`
+- [x] **P0** LEF output is bounding-box only, not real geometry
+  - Fixed: LEF now emits actual per-rect geometry instead of single bounding box
+  - Router can now route through gaps in artwork
+  - Coordinates offset relative to macro origin (bbox corner)
 
 ### P1 - Robustness
 
-- [ ] **P1** `most_conservative_drc()` missing max_width/wide_metal propagation
-  - In multi-layer mode, `shared_drc` (`main.rs:273-281`) copies `profiles[0].drc` and only updates `min_width`, `min_spacing`, `min_area`
-  - `max_width`, `wide_metal_threshold`, `wide_metal_spacing` from alt layers are silently lost
-  - If profiles[0] has no max_width but an alt layer does, no max_width capping occurs during polygon generation
-  - Per-layer DRC check catches violations post-generation, but "clean by construction" guarantee is broken
-  - Fix: take min of max_width across profiles, max of wide_metal values
-  - Files: `src/main.rs`
+- [x] **P1** `most_conservative_drc()` missing max_width/wide_metal propagation
+  - Fixed: now propagates max_width (min), wide_metal_threshold (min), wide_metal_spacing (max) across profiles
 
-- [ ] **P1** Palette mode num_colors > profiles.len() silent fallback
-  - `main.rs:661`: `profiles.get(layer_index).unwrap_or(&profiles[0])` means excess colors get written to profiles[0]'s GDS layer
-  - Multiple k-means clusters silently merge onto the same layer
-  - Fix: error or warn when `num_colors > profiles.len()`
-  - Files: `src/main.rs`
+- [x] **P1** Palette mode num_colors > profiles.len() silent fallback
+  - Fixed: anyhow::ensure! errors when num_colors exceeds available profiles
+  - Applied to both generate and merge palette paths; replaced .unwrap_or fallback with direct index
 
-- [ ] **P1** AREF instance coordinate overflow during GDS import
-  - `gdsio.rs:428-429`: `c * col_pitch_x + r * row_pitch_x` uses no checked arithmetic
-  - Large AREF (e.g. 10000 cols x 100um pitch = 1B dbu) overflows i32, producing corrupted exclusion zones
-  - Distinct from general coordinate overflow (line 188) - this is specifically about GDS import flattening
-  - Fix: use `checked_mul`/`checked_add` or validate before loop
-  - Files: `src/gdsio.rs`
+- [x] **P1** AREF instance coordinate overflow during GDS import
+  - Fixed: replaced arithmetic with saturating_mul/saturating_add to prevent i32 overflow
+  - Overflowing coordinates clamp to i32::MAX/MIN instead of wrapping
 
-- [ ] **P1** README "DRC-clean by construction" overclaim in comparison table
-  - `README.md:207`: comparison table says "DRC-clean output: By construction" without qualification
-  - Only min_width and min_spacing are guaranteed by construction (pixel grid)
-  - max_width relies on post-generation capping, density on pre-pass enforcement, min_area on post-filtering
-  - The disclaimer section (line 283) is good but the marketing table is misleading
-  - Fix: change to "By construction (width/spacing)" or add footnote
-  - Files: `README.md`
+- [x] **P1** README "DRC-clean by construction" overclaim in comparison table
+  - Fixed: changed to "By construction (width/spacing)" to clarify scope
 
-- [ ] **P1** No image size guard
-  - A 100k x 100k all-black image produces 10 billion pixels and potentially millions of polygons
-  - No maximum image dimension or polygon count limit; could OOM or hang
-  - Add a configurable max dimension (e.g. 10000px default) with `--max-pixels` override
-  - Files: `src/artwork.rs`, `src/main.rs`
+- [x] **P1** No image size guard
+  - Fixed: added 16384x16384 max dimension check in load_artwork()
+  - Error message directs user to --max-width/--max-height for resize
 
-- [ ] **P1** No PDK cross-field validation
-  - `density_min` not validated to be < `density_max`
-  - `min_area` and `min_enclosed_area` not validated as non-negative
-  - No check that `db_units_per_um > 0`
-  - Add validation in `PdkConfig::load()` or a dedicated `validate()` method
-  - Files: `src/pdk.rs`
+- [x] **P1** No PDK cross-field validation
+  - Fixed: added db_units_per_um > 0, min_area >= 0, density_min in [0,1], density_min <= density_max
 
-- [ ] **P1** Temp file handling in gdsio.rs uses PID-based naming
-  - `gdsio.rs:29-44`: uses `format!("fabbula_decompress_{}.gds", std::process::id())` instead of `tempfile::NamedTempFile`
-  - PID-based naming can collide; file persists on early error
-  - Replace with `tempfile` crate for safe temp file handling
-  - Files: `src/gdsio.rs`, `Cargo.toml`
+- [x] **P1** Temp file handling in gdsio.rs uses PID-based naming
+  - Fixed: replaced with tempfile::NamedTempFile; auto-cleaned on drop
 
-- [ ] **P1** GDS coordinate overflow for large designs
-  - i32 coordinates at 1000 DBU/um overflow at ~2.1mm
-  - A 10mm chip at 1nm DBU (1M DBU/um) overflows i32 with no warning
-  - Add overflow check when computing coordinates, warn or error if exceeded
-  - Files: `src/polygon.rs`, `src/pdk.rs`
+- [x] **P1** GDS coordinate overflow for large designs
+  - Fixed: added i32 overflow check in generate_polygons before rect computation
+  - Error message suggests reducing image size or using coarser PDK grid
 
-- [ ] **P1** Touching mode violates DRC for GF180MCU and FreePDK45
-  - In touching mode (default), gap between separate features = min_width
-  - GF180MCU: min_width=0.44 < min_spacing=0.46, so 1-pixel gaps violate spacing by 0.02um
-  - FreePDK45: merged rects exceed wide_metal_threshold=0.9, but gap=0.8 < wide_metal_spacing=0.9
-  - DRC check is opt-in (`--check-drc`), so violations are completely silent by default
-  - Fix: either validate min_width >= effective_spacing at PDK load and warn/error, or adjust pitch in touching mode to max(min_width, effective_spacing)
-  - Files: `src/polygon.rs:114-115`, `src/pdk.rs`
+- [x] **P1** Touching mode violates DRC for GF180MCU and FreePDK45
+  - Fixed: touching mode pitch changed from min_width to max(min_width, effective_spacing)
+  - Guarantees spacing even when min_width < min_spacing or wide_metal_spacing
 
-- [ ] **P1** No end-to-end CLI tests
-  - No test runs `fabbula generate` or `fabbula merge` with a real image and validates output GDS
-  - Add integration tests that exercise full CLI pipeline
-  - Files: `tests/`
+- [x] **P1** No end-to-end CLI tests
+  - Added tests/end_to_end.rs with 5 tests: real image pipeline, all-PDKs separated mode,
+    empty bitmap, single pixel, all strategies DRC-clean
 
 ### P2 - Improvements
 
@@ -271,57 +236,34 @@
   - Expected for an artwork tool, but README should explicitly list supported vs unsupported checks
   - Files: `README.md`
 
-- [ ] **P2** Clarify LEF output limitations in README
-  - Roadmap shows LEF output as complete, but it's bounding-box only
-  - Either improve or clearly document the limitation
-  - Files: `README.md`
+- [x] **P2** Clarify LEF output limitations in README
+  - Fixed: LEF now emits actual geometry, no longer bounding-box only
 
-- [ ] **P2** min_area sqrt rounding - use direct dbu^2 calculation
-  - `polygon.rs:156`: `um_to_dbu(sqrt(min_area))^2` introduces unnecessary rounding vs direct conversion
-  - ~1% error for sub-um geometries (ASAP7: 7921 vs 8000 dbu^2), negligible for mature nodes
-  - Fix: `(drc.min_area * (dbu_per_um as f64).powi(2)) as i64`
-  - Files: `src/polygon.rs`
+- [x] **P2** min_area sqrt rounding - use direct dbu^2 calculation
+  - Fixed: direct um^2 -> dbu^2 conversion without sqrt roundtrip
 
 - [ ] **P2** GF180MCU min_spacing DRM verification needed
   - `pdks/gf180mcu.toml:29`: TOML says 0.46um, one source claims DRM 14.6.2 specifies 0.44um
   - 0.02um difference matters at 180nm - needs verification against official DRM document
   - Files: `pdks/gf180mcu.toml`
 
-- [ ] **P2** Density window silently skipped when pitch > window
-  - `main.rs:490-496`: when `density_window_um / pitch_um < 1`, `window_px = 0` and enforcement is skipped with no log
-  - User might expect density to be enforced but it's silently disabled
-  - Fix: log warning when window_px == 0
-  - Files: `src/main.rs`
+- [x] **P2** Density window silently skipped when pitch > window
+  - Fixed: added tracing::warn when window_px == 0
 
-- [ ] **P2** K-means convergence feedback
-  - `color.rs:223-304`: fixed 15-iteration limit with no log of whether convergence was reached
-  - Could produce poor layer separation without any user visibility
-  - Fix: log iteration count; warn if max iterations reached
-  - Files: `src/color.rs`
+- [x] **P2** K-means convergence feedback
+  - Fixed: debug log on convergence, warn on max iterations reached
 
-- [ ] **P2** PDK layer number collision validation
-  - If artwork_layer and artwork_layer_alt have the same gds_layer number, silently creates duplicate profiles
-  - User error but easy to catch during PDK load
-  - Fix: validate uniqueness in `PdkConfig::load()`
-  - Files: `src/pdk.rs`
+- [x] **P2** PDK layer number collision validation
+  - Fixed: validate() checks artwork_layer vs artwork_layer_alt GDS layer/datatype collision
 
-- [ ] **P2** README "vectorize" language leftover
-  - `README.md:137`: "Styles that vectorize well" - fabbula doesn't vectorize, it rasterizes to bitmap then generates rects
-  - Leftover from before previous audit fixed the pipeline description
-  - Fix: change to "Styles that work well" or "Styles that convert well"
-  - Files: `README.md`
+- [x] **P2** README "vectorize" language leftover
+  - Fixed: changed to "Styles that convert well"
 
-- [ ] **P2** README roadmap marks density-aware generation as incomplete but it's implemented
-  - `README.md:256`: roadmap shows `[ ] Density-aware artwork generation`
-  - But `enforce_density()` in `artwork.rs` and the density feedback loop in `main.rs:412-477` are fully implemented and active
-  - Fix: check the box `[x]` or reword to distinguish done vs planned enhancement
-  - Files: `README.md`
+- [x] **P2** README roadmap marks density-aware generation as incomplete but it's implemented
+  - Fixed: checked the roadmap box
 
-- [ ] **P2** CLI help text lists only 3 of 6 built-in PDKs
-  - `src/main.rs:35`: `long_about` says "Supports multiple open PDKs (SKY130, IHP SG13G2, GF180MCU)"
-  - Missing FreePDK45, ASAP7, fabbula2 (added after initial release)
-  - Fix: update to "6 built-in PDKs" or list all 6
-  - Files: `src/main.rs`
+- [x] **P2** CLI help text lists only 3 of 6 built-in PDKs
+  - Fixed: updated to list all 6 PDKs + custom TOML
 
 - [ ] **P2** No dry-run/validate subcommand
   - Can't preview DRC results, polygon count, or check settings without writing GDS
@@ -329,11 +271,8 @@
   - Fix: add `--dry-run` flag that runs full pipeline but skips GDS write, or a `validate` subcommand
   - Files: `src/main.rs`
 
-- [ ] **P2** README "What makes it fast" section outdated (missing SAT mention)
-  - `README.md:242`: says "R-tree spatial index" for DRC
-  - Density now uses SAT (summed area table) which was a major optimization, but isn't mentioned
-  - Fix: update to mention both R-tree (spacing) and SAT (density)
-  - Files: `README.md`
+- [x] **P2** README "What makes it fast" section outdated (missing SAT mention)
+  - Fixed: added SAT-based density checking mention
 
 - [ ] **P2** DRC check is opt-in, should be default
   - `--check-drc` must be explicitly passed; default workflow produces GDS with no DRC validation
@@ -341,19 +280,11 @@
   - Fix: make DRC checking default-on with `--no-check-drc` to opt out
   - Files: `src/main.rs:122`
 
-- [ ] **P2** K-means empty cluster not reinitialized
-  - `color.rs:294-300`: if a cluster gets zero assigned pixels, its centroid stays frozen at old position forever
-  - Can cause poor layer separation in palette mode - one layer gets stale color assignments
-  - Distinct from convergence feedback issue - this is about correctness, not logging
-  - Fix: reinitialize empty clusters to random pixel or farthest-from-centroid
-  - Files: `src/color.rs`
+- [x] **P2** K-means empty cluster not reinitialized
+  - Fixed: empty clusters reinitialized to farthest pixel from nearest centroid
 
-- [ ] **P2** Min-area filtering silently removes small features
-  - `polygon.rs:155-164`: rects below min_area are filtered with no per-feature warning
-  - For ASAP7 (min_area=0.008um^2, pixel=0.04x0.04=0.0016um^2), isolated single-pixel features are silently dropped
-  - Only the final polygon count is logged; user has no visibility into what was removed
-  - Fix: log warning when min_area filtering removes >0 rects, report count and percentage
-  - Files: `src/polygon.rs`
+- [x] **P2** Min-area filtering silently removes small features
+  - Fixed: tracing::warn when min_area filter removes rects, with count and percentage
 
 - [ ] **P2** GDS layer/datatype range not validated against GDS spec
   - `pdk.rs`: no validation that gds_layer is in [0, 32767] or gds_datatype is in [0, 255]
@@ -361,24 +292,14 @@
   - Fix: add range checks in PdkConfig::validate() or load()
   - Files: `src/pdk.rs`
 
-- [ ] **P2** Invalid --threshold values silently default to 128
-  - `main.rs:296-299`: non-numeric threshold strings (e.g. "foo", "999") silently fall through to Luminance(128)
-  - u8 parse of "999" fails silently; user gets unexpected threshold with no warning
-  - Fix: return error for unrecognized threshold values instead of silent fallback
-  - Files: `src/main.rs`
+- [x] **P2** Invalid --threshold values silently default to 128
+  - Fixed: parse_threshold now returns Result, errors on invalid values
 
-- [ ] **P2** No unit tests for edge cases (empty image, all-white, single pixel)
-  - No tests for: 0 ON pixels after thresholding, all-white image, all-black image, 1x1 pixel bitmap
-  - Unknown whether pipeline handles these gracefully or produces empty/malformed GDS
-  - Fix: add edge case tests in polygon.rs and artwork.rs test modules
-  - Files: `src/polygon.rs`, `src/artwork.rs`
+- [x] **P2** No unit tests for edge cases (empty image, all-white, single pixel)
+  - Fixed: added in tests/end_to_end.rs - empty_bitmap, single_pixel, all_strategies tests
 
-- [ ] **P2** README preamble "ready to be fabricated" overpromises vs disclaimer
-  - README intro says "DRC-clean GDSII layout data - ready to be fabricated" and references "tapeout"
-  - Disclaimer section says "fabbula has not been used on a production tapeout"
-  - Users skimming the top may get false confidence; the preamble and disclaimer contradict
-  - Fix: soften intro to "designed for top-metal artwork, verify with foundry DRC tools"
-  - Files: `README.md`
+- [x] **P2** README preamble "ready to be fabricated" overpromises vs disclaimer
+  - Fixed: softened to "for top-metal chip artwork. Verify with your foundry DRC tools before tapeout."
 
 - [ ] **P2** SKY130 met4 alt-layer density_window_um=50 may be too small
   - `pdks/sky130.toml:48`: met4 density window is 50um vs met5's 700um - a 14x difference

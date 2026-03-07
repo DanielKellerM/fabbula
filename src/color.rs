@@ -261,8 +261,9 @@ fn kmeans(pixels: &[[f32; 3]], k: usize, max_iters: usize) -> Vec<[f32; 3]> {
     }
 
     let mut assignments = vec![0usize; n];
+    let mut converged = false;
 
-    for _ in 0..max_iters {
+    for iter in 0..max_iters {
         // Assign pixels to nearest centroid
         let mut changed = false;
         for (i, px) in pixels.iter().enumerate() {
@@ -274,6 +275,8 @@ fn kmeans(pixels: &[[f32; 3]], k: usize, max_iters: usize) -> Vec<[f32; 3]> {
         }
 
         if !changed {
+            tracing::debug!("K-means converged after {} iterations", iter + 1);
+            converged = true;
             break;
         }
 
@@ -288,13 +291,46 @@ fn kmeans(pixels: &[[f32; 3]], k: usize, max_iters: usize) -> Vec<[f32; 3]> {
             counts[c] += 1;
         }
 
+        // Pre-compute replacements for empty clusters (diverse pixels)
+        let empty_indices: Vec<usize> = counts
+            .iter()
+            .enumerate()
+            .filter(|&(_, c)| *c == 0)
+            .map(|(i, _)| i)
+            .collect();
+        let mut replacements: Vec<[f32; 3]> = Vec::new();
+        if !empty_indices.is_empty() {
+            // Sort pixels by distance from centroids, pick farthest ones
+            let mut scored: Vec<(usize, f32)> = pixels
+                .iter()
+                .enumerate()
+                .map(|(i, px)| (i, min_centroid_dist(px, &centroids)))
+                .collect();
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            // Pick up to len(empty_indices) distinct replacement pixels
+            for i in 0..empty_indices.len() {
+                let idx = scored.get(i).map(|s| s.0).unwrap_or(0);
+                replacements.push(pixels[idx]);
+            }
+        }
+        let mut repl_iter = 0;
         for (j, centroid) in centroids.iter_mut().enumerate() {
             if counts[j] > 0 {
                 centroid[0] = (sums[j][0] / counts[j] as f64) as f32;
                 centroid[1] = (sums[j][1] / counts[j] as f64) as f32;
                 centroid[2] = (sums[j][2] / counts[j] as f64) as f32;
+            } else if repl_iter < replacements.len() {
+                *centroid = replacements[repl_iter];
+                repl_iter += 1;
             }
         }
+    }
+
+    if !converged {
+        tracing::warn!(
+            "K-means did not converge after {} iterations; layer separation may be poor",
+            max_iters
+        );
     }
 
     centroids
@@ -312,6 +348,14 @@ fn nearest_centroid(px: &[f32; 3], centroids: &[[f32; 3]]) -> usize {
         }
     }
     best
+}
+
+#[inline]
+fn min_centroid_dist(px: &[f32; 3], centroids: &[[f32; 3]]) -> f32 {
+    centroids
+        .iter()
+        .map(|c| (px[0] - c[0]).powi(2) + (px[1] - c[1]).powi(2) + (px[2] - c[2]).powi(2))
+        .fold(f32::MAX, f32::min)
 }
 
 #[inline]
@@ -397,7 +441,6 @@ mod tests {
             min_width: 1.0,
             min_spacing: 0.5,
             min_area: 0.0,
-            min_enclosed_area: 0.0,
             density_min: 0.0,
             density_max: 1.0,
             density_window_um: 500.0,

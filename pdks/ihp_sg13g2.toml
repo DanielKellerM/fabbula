@@ -29,7 +29,6 @@ gds_datatype = 0
 min_width = 1.8
 min_spacing = 1.8
 min_area = 0.0            # Not specified in SG13G2_os_layout_rules.pdf; 0 = conservative (no minimum)
-min_enclosed_area = 0.0
 density_min = 0.0
 density_max = 0.80
 density_window_um = 500.0

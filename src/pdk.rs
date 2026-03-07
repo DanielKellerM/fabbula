@@ -45,9 +45,6 @@ pub struct DrcRules {
     /// Minimum polygon area in µm²
     #[serde(default)]
     pub min_area: f64,
-    /// Minimum enclosed area (donut holes) in µm²
-    #[serde(default)]
-    pub min_enclosed_area: f64,
     /// Minimum metal density (0.0–1.0)
     #[serde(default)]
     pub density_min: f64,
@@ -242,9 +239,24 @@ impl PdkConfig {
             }
         }
         anyhow::ensure!(
+            self.pdk.db_units_per_um > 0,
+            "db_units_per_um must be positive"
+        );
+        anyhow::ensure!(
             self.grid.manufacturing_grid_um > 0.0,
             "Manufacturing grid must be positive"
         );
+        // Check artwork_layer vs artwork_layer_alt GDS layer collision
+        if let Some(ref alt) = self.artwork_layer_alt
+            && self.artwork_layer.gds_layer == alt.gds_layer
+            && self.artwork_layer.gds_datatype == alt.gds_datatype
+        {
+            anyhow::bail!(
+                "artwork_layer and artwork_layer_alt have the same GDS layer/datatype ({}/{})",
+                self.artwork_layer.gds_layer,
+                self.artwork_layer.gds_datatype
+            );
+        }
         Ok(())
     }
 
@@ -275,6 +287,25 @@ impl PdkConfig {
                 rules.min_width
             );
         }
+        anyhow::ensure!(
+            rules.min_area >= 0.0,
+            "{} min_area must be non-negative, got {}",
+            section,
+            rules.min_area
+        );
+        anyhow::ensure!(
+            rules.density_min >= 0.0 && rules.density_min <= 1.0,
+            "{} density_min must be in [0, 1], got {}",
+            section,
+            rules.density_min
+        );
+        anyhow::ensure!(
+            rules.density_min <= rules.density_max,
+            "{} density_min ({}) must be <= density_max ({})",
+            section,
+            rules.density_min,
+            rules.density_max
+        );
         if let Some(wide_s) = rules.wide_metal_spacing {
             anyhow::ensure!(
                 wide_s >= rules.min_spacing,

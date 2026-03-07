@@ -19,7 +19,7 @@
 
 ## What is fabbula?
 
-**fabbula** is a Rust toolchain that converts raster images into DRC-clean GDSII layout data - ready to be fabricated as artwork on the top-metal layer of your chip.
+**fabbula** is a Rust toolchain that converts raster images into DRC-clean GDSII layout data for top-metal chip artwork. Verify with your foundry DRC tools before tapeout.
 
 The name comes from **fab** (as in semiconductor fabrication) + **fabula** (Latin for *story*, *tale*, *fable*). Every chip carries a story - of the team that designed it, the problem it solves, the late nights and breakthroughs. **fabbula** lets you etch that story into silicon, literally.
 
@@ -134,7 +134,7 @@ Bold clean shapes suitable for metal etching.
 Square format, 1024x1024.
 ```
 
-**Styles that vectorize well:** linocut, woodcut, stencil art, silhouette, paper cutout, Japanese mon, heraldic crest, tribal art, art deco geometric, pixel art.
+**Styles that convert well:** linocut, woodcut, stencil art, silhouette, paper cutout, Japanese mon, heraldic crest, tribal art, art deco geometric, pixel art.
 
 **Styles to avoid:** photorealistic, watercolor, pencil sketch, anything with gradients or soft edges.
 
@@ -204,7 +204,7 @@ All existing tools are Python or C, most require external dependencies (Magic VL
 | Language | Rust | Python | Python | C | Python |
 | Self-contained | Yes | No (KLayout, IM, Potrace) | No (Magic VLSI) | Yes | No (Magic, Docker) |
 | Multi-PDK | 6 built-in + custom TOML | IHP SG13G2 | SKY130 | Manual | SKY130 |
-| DRC-clean output | By construction | Tetromino fill | Manual | No | No |
+| DRC-clean output | By construction (width/spacing) | Tetromino fill | Manual | No | No |
 | Parallel DRC | Yes (rayon) | No | No | No | No |
 | GDS merge | Yes | Yes (via KLayout) | No | No | No |
 | Built-in DRC check | Yes | No | No | No | No |
@@ -240,6 +240,7 @@ Full DRC check (min width, max width, min spacing, wide-metal spacing, min area,
 - **Packed bitset bitmap** - `Vec<u64>` instead of `Vec<bool>` cuts memory 8x, and `count_ones()` makes density computation nearly free
 - **Parallel DRC** - width/area and spacing checks run across cores via rayon, giving ~58% speedup on multi-core machines
 - **R-tree spatial index** - spacing checks are O(n log n) instead of O(n^2), making 100k-rect layouts practical
+- **Summed area table (SAT)** - density checking runs in O(1) per window via integral image, replacing per-window polygon queries
 - **Streaming I/O** - HTML/SVG previews write directly through a BufWriter instead of building multi-MB intermediate strings
 
 ## Roadmap
@@ -253,7 +254,7 @@ Full DRC check (min width, max width, min spacing, wide-metal spacing, min area,
 - [x] SVG input support (via resvg rasterization)
 - [ ] Built-in vtracer vectorization (PNG → SVG → GDS in one binary)
 - [x] Exclusion zones (avoid existing top-metal structures)
-- [ ] Density-aware artwork generation
+- [x] Density-aware artwork generation
 - [x] LEF output for OpenLane/OpenROAD integration
 - [x] Floyd-Steinberg dithering for gradient artwork
 - [ ] OASIS output support

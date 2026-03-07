@@ -26,23 +26,21 @@ fn load_gds(path: &Path) -> Result<GdsLibrary> {
         decoder
             .read_to_end(&mut decompressed)
             .map_err(|e| anyhow::anyhow!("Failed to decompress {}: {}", path.display(), e))?;
-        let tmp_dir = std::env::temp_dir();
-        let tmp_path = tmp_dir.join(format!("fabbula_decompress_{}.gds", std::process::id()));
-        std::fs::write(&tmp_path, &decompressed)?;
+        let mut tmp_file = tempfile::NamedTempFile::with_suffix(".gds")
+            .map_err(|e| anyhow::anyhow!("Failed to create temp file: {}", e))?;
+        std::io::Write::write_all(&mut tmp_file, &decompressed)?;
         tracing::info!(
             "Decompressed {} ({:.1} MB)",
             path.display(),
             decompressed.len() as f64 / 1_000_000.0
         );
-        let lib = GdsLibrary::load(&tmp_path).map_err(|e| {
+        GdsLibrary::load(tmp_file.path()).map_err(|e| {
             anyhow::anyhow!(
                 "Failed to read decompressed GDSII {}: {:?}",
                 path.display(),
                 e
             )
-        });
-        let _ = std::fs::remove_file(&tmp_path);
-        lib
+        })
     } else {
         GdsLibrary::load(path)
             .map_err(|e| anyhow::anyhow!("Failed to read GDSII {}: {:?}", path.display(), e))
@@ -363,16 +361,35 @@ fn flatten_cell(
                     continue;
                 }
                 let half_w = p.width.unwrap_or(0).max(0) / 2;
+                // Compute raw vertex bbox first
                 let mut x0 = i32::MAX;
                 let mut y0 = i32::MAX;
                 let mut x1 = i32::MIN;
                 let mut y1 = i32::MIN;
                 for pt in &p.xy {
                     let (tx, ty) = transform.apply(pt);
-                    x0 = x0.min(tx - half_w);
-                    y0 = y0.min(ty - half_w);
-                    x1 = x1.max(tx + half_w);
-                    y1 = y1.max(ty + half_w);
+                    x0 = x0.min(tx);
+                    y0 = y0.min(ty);
+                    x1 = x1.max(tx);
+                    y1 = y1.max(ty);
+                }
+                // Expand by half_w perpendicular to path direction.
+                // For 2-point axis-aligned paths (common case), expand only
+                // perpendicular. For multi-segment or diagonal paths, expand
+                // in all directions (conservative).
+                let is_horizontal = y0 == y1 && p.xy.len() == 2;
+                let is_vertical = x0 == x1 && p.xy.len() == 2;
+                if is_horizontal {
+                    y0 -= half_w;
+                    y1 += half_w;
+                } else if is_vertical {
+                    x0 -= half_w;
+                    x1 += half_w;
+                } else {
+                    x0 -= half_w;
+                    y0 -= half_w;
+                    x1 += half_w;
+                    y1 += half_w;
                 }
                 if x0 < x1 && y0 < y1 {
                     rects.push(Rect::new(x0, y0, x1, y1));
@@ -425,8 +442,14 @@ fn flatten_cell(
 
                     for r in 0..rows {
                         for c in 0..cols {
-                            let inst_x = origin.x + c * col_pitch_x + r * row_pitch_x;
-                            let inst_y = origin.y + c * col_pitch_y + r * row_pitch_y;
+                            let inst_x = origin
+                                .x
+                                .saturating_add(c.saturating_mul(col_pitch_x))
+                                .saturating_add(r.saturating_mul(row_pitch_x));
+                            let inst_y = origin
+                                .y
+                                .saturating_add(c.saturating_mul(col_pitch_y))
+                                .saturating_add(r.saturating_mul(row_pitch_y));
                             let child_transform =
                                 transform.compose(aref.strans.as_ref(), inst_x, inst_y);
                             flatten_cell(
@@ -629,8 +652,33 @@ mod tests {
 
         let rects = read_existing_metal(f.path(), &pdk, Some("top"), None).unwrap();
         assert_eq!(rects.len(), 1);
-        // half_w = 20, so bbox: (80, 80) to (320, 120)
-        assert_eq!(rects[0], Rect::new(80, 80, 320, 120));
+        // Horizontal path: expand only perpendicular (y) by half_w=20
+        assert_eq!(rects[0], Rect::new(100, 80, 300, 120));
+    }
+
+    #[test]
+    fn test_path_vertical() {
+        let pdk = test_pdk();
+        let layer = pdk.artwork_layer.gds_layer;
+        let dt = pdk.artwork_layer.gds_datatype;
+
+        let mut cell = GdsStruct::new("top");
+        cell.elems.push(GdsElement::GdsPath(GdsPath {
+            layer,
+            datatype: dt,
+            xy: vec![GdsPoint::new(200, 100), GdsPoint::new(200, 500)],
+            width: Some(60),
+            ..Default::default()
+        }));
+
+        let mut lib = GdsLibrary::new("test");
+        lib.structs.push(cell);
+        let f = save_lib(&lib);
+
+        let rects = read_existing_metal(f.path(), &pdk, Some("top"), None).unwrap();
+        assert_eq!(rects.len(), 1);
+        // Vertical path: expand only perpendicular (x) by half_w=30
+        assert_eq!(rects[0], Rect::new(170, 100, 230, 500));
     }
 
     #[test]

@@ -306,6 +306,15 @@ pub fn load_artwork(
     };
 
     let (width, height) = img.dimensions();
+    const MAX_DIM: u32 = 16384;
+    anyhow::ensure!(
+        width <= MAX_DIM && height <= MAX_DIM,
+        "Image dimensions {}x{} exceed maximum {}x{}. Use --max-width/--max-height to resize.",
+        width,
+        height,
+        MAX_DIM,
+        MAX_DIM
+    );
     tracing::info!("Processing {}x{} image", width, height);
 
     let bools: Vec<bool> = match threshold {
