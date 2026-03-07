@@ -29,7 +29,6 @@ toml = "0.8"
 
 # Error handling
 anyhow = "1"
-thiserror = "1"
 
 # Logging
 tracing = "0.1"

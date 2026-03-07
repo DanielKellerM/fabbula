@@ -13,16 +13,19 @@ use fabbula::polygon::{PolygonStrategy, generate_polygons};
 use std::path::Path;
 
 /// Full pipeline with a real image and sky130 PDK.
+/// Skipped in CI where media/input/bear.png is not available.
 #[test]
 fn generate_sky130_from_image() {
+    let image_path = Path::new("media/input/bear.png");
+    if !image_path.exists() {
+        eprintln!(
+            "Skipping: {} not found (not available in CI)",
+            image_path.display()
+        );
+        return;
+    }
     let pdk = PdkConfig::builtin("sky130").unwrap();
-    let bitmap = load_artwork(
-        Path::new("media/input/bear.png"),
-        ThresholdMode::Otsu,
-        Some((128, 128)),
-        false,
-    )
-    .unwrap();
+    let bitmap = load_artwork(image_path, ThresholdMode::Otsu, Some((128, 128)), false).unwrap();
     assert!(bitmap.width > 0 && bitmap.height > 0);
 
     let rects =
