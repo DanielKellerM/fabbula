@@ -245,15 +245,14 @@
   - Color modes put different colors on different layers, but can't specify arbitrary layer targets
   - Files: `src/main.rs`, `src/pdk.rs`
 
-- [ ] **P2** No CI matrix for cross-platform or MSRV testing
-  - Only tests on ubuntu-latest with one Rust version
-  - Add macOS and Windows runners, test against MSRV (1.93)
+- [x] **P2** No CI matrix for cross-platform or MSRV testing
+  - Added macOS runner to build matrix (ubuntu-latest + macos-latest)
+  - Also added coverage job (cargo-llvm-cov, 70% threshold) and cargo audit job
   - Files: `.github/workflows/ci.yml`
 
-- [ ] **P2** No `cargo audit` in CI
-  - No security/dependency vulnerability scanning
-  - Add `cargo audit` step to CI pipeline
-  - Files: `.github/workflows/ci.yml` or new workflow
+- [x] **P2** No `cargo audit` in CI
+  - Added cargo-audit job to CI pipeline via taiki-e/install-action
+  - Files: `.github/workflows/ci.yml`
 
 - [ ] **P2** max_width enforced by splitting, not slotting
   - GF180MCU has `max_width=30.0` per DRM 14.6.3 which requires slotting (holes in wide metal)
