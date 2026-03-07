@@ -511,6 +511,20 @@ but could hurt credibility with experts who know these aren't real.
   - Fixed: warn when rect count > 50k, suggesting --deep-zoom
   - Files: `src/preview.rs`
 
+## Gallery & Publication Prep
+
+- [x] **P1** Pre-publication artwork gallery expansion
+  - Generated 10 new ChatGPT images (mandala, portrait, vacuum_tube, crane_mon, golden_gate, astronaut, lotus, pixel_ship, shield_logo, dragon)
+  - `scripts/generate_gallery.sh`: batch preview generation across PDK/mode/size combos
+  - 26 total previews (up from 10): single-layer, multi-layer palette, dithered, small/large scale
+  - Updated `docs/index.html` with new sections: Single Layer (10), Multi-Layer Palette (9), Special Modes (5), Featured (1)
+  - Files: `scripts/generate_gallery.sh`, `docs/index.html`, `docs/previews/*`, `media/input/*`
+
+- [ ] **P1** Real GDS verification (foundry DRC + merge into real chip)
+  - Pick a real chip GDS and run foundry DRC (Calibre/ICV) on fabbula output
+  - Merge artwork into real chip GDS, re-run DRC
+  - Document results in README for credibility
+
 ## Completed
 
 - [x] Make touching mode the default, add `--separated` opt-out flag
