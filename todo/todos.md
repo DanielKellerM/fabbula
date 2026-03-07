@@ -166,6 +166,35 @@
 
 ### P1 - Robustness
 
+- [ ] **P1** `most_conservative_drc()` missing max_width/wide_metal propagation
+  - In multi-layer mode, `shared_drc` (`main.rs:273-281`) copies `profiles[0].drc` and only updates `min_width`, `min_spacing`, `min_area`
+  - `max_width`, `wide_metal_threshold`, `wide_metal_spacing` from alt layers are silently lost
+  - If profiles[0] has no max_width but an alt layer does, no max_width capping occurs during polygon generation
+  - Per-layer DRC check catches violations post-generation, but "clean by construction" guarantee is broken
+  - Fix: take min of max_width across profiles, max of wide_metal values
+  - Files: `src/main.rs`
+
+- [ ] **P1** Palette mode num_colors > profiles.len() silent fallback
+  - `main.rs:661`: `profiles.get(layer_index).unwrap_or(&profiles[0])` means excess colors get written to profiles[0]'s GDS layer
+  - Multiple k-means clusters silently merge onto the same layer
+  - Fix: error or warn when `num_colors > profiles.len()`
+  - Files: `src/main.rs`
+
+- [ ] **P1** AREF instance coordinate overflow during GDS import
+  - `gdsio.rs:428-429`: `c * col_pitch_x + r * row_pitch_x` uses no checked arithmetic
+  - Large AREF (e.g. 10000 cols x 100um pitch = 1B dbu) overflows i32, producing corrupted exclusion zones
+  - Distinct from general coordinate overflow (line 188) - this is specifically about GDS import flattening
+  - Fix: use `checked_mul`/`checked_add` or validate before loop
+  - Files: `src/gdsio.rs`
+
+- [ ] **P1** README "DRC-clean by construction" overclaim in comparison table
+  - `README.md:207`: comparison table says "DRC-clean output: By construction" without qualification
+  - Only min_width and min_spacing are guaranteed by construction (pixel grid)
+  - max_width relies on post-generation capping, density on pre-pass enforcement, min_area on post-filtering
+  - The disclaimer section (line 283) is good but the marketing table is misleading
+  - Fix: change to "By construction (width/spacing)" or add footnote
+  - Files: `README.md`
+
 - [ ] **P1** No image size guard
   - A 100k x 100k all-black image produces 10 billion pixels and potentially millions of polygons
   - No maximum image dimension or polygon count limit; could OOM or hang
@@ -238,6 +267,41 @@
 - [ ] **P2** Clarify LEF output limitations in README
   - Roadmap shows LEF output as complete, but it's bounding-box only
   - Either improve or clearly document the limitation
+  - Files: `README.md`
+
+- [ ] **P2** min_area sqrt rounding - use direct dbu^2 calculation
+  - `polygon.rs:156`: `um_to_dbu(sqrt(min_area))^2` introduces unnecessary rounding vs direct conversion
+  - ~1% error for sub-um geometries (ASAP7: 7921 vs 8000 dbu^2), negligible for mature nodes
+  - Fix: `(drc.min_area * (dbu_per_um as f64).powi(2)) as i64`
+  - Files: `src/polygon.rs`
+
+- [ ] **P2** GF180MCU min_spacing DRM verification needed
+  - `pdks/gf180mcu.toml:29`: TOML says 0.46um, one source claims DRM 14.6.2 specifies 0.44um
+  - 0.02um difference matters at 180nm - needs verification against official DRM document
+  - Files: `pdks/gf180mcu.toml`
+
+- [ ] **P2** Density window silently skipped when pitch > window
+  - `main.rs:490-496`: when `density_window_um / pitch_um < 1`, `window_px = 0` and enforcement is skipped with no log
+  - User might expect density to be enforced but it's silently disabled
+  - Fix: log warning when window_px == 0
+  - Files: `src/main.rs`
+
+- [ ] **P2** K-means convergence feedback
+  - `color.rs:223-304`: fixed 15-iteration limit with no log of whether convergence was reached
+  - Could produce poor layer separation without any user visibility
+  - Fix: log iteration count; warn if max iterations reached
+  - Files: `src/color.rs`
+
+- [ ] **P2** PDK layer number collision validation
+  - If artwork_layer and artwork_layer_alt have the same gds_layer number, silently creates duplicate profiles
+  - User error but easy to catch during PDK load
+  - Fix: validate uniqueness in `PdkConfig::load()`
+  - Files: `src/pdk.rs`
+
+- [ ] **P2** README "vectorize" language leftover
+  - `README.md:137`: "Styles that vectorize well" - fabbula doesn't vectorize, it rasterizes to bitmap then generates rects
+  - Leftover from before previous audit fixed the pipeline description
+  - Fix: change to "Styles that work well" or "Styles that convert well"
   - Files: `README.md`
 
 ## Completed
