@@ -378,14 +378,14 @@ fn report_bounds(layer_results: &[(Vec<Rect>, &ArtworkLayerProfile)], pdk: &PdkC
         .collect();
     if let Some(bb) = bounding_box(&all_rects) {
         let dbu_per_um = pdk.pdk.db_units_per_um as f64;
-        let w_um = bb.width() as f64 / dbu_per_um;
-        let h_um = bb.height() as f64 / dbu_per_um;
+        let w_um = bb.width().0 as f64 / dbu_per_um;
+        let h_um = bb.height().0 as f64 / dbu_per_um;
         tracing::info!(
             "Artwork bounds: ({:.2}, {:.2}) to ({:.2}, {:.2}) um - {:.1} x {:.1} um ({:.3} x {:.3} mm)",
-            bb.x0 as f64 / dbu_per_um,
-            bb.y0 as f64 / dbu_per_um,
-            bb.x1 as f64 / dbu_per_um,
-            bb.y1 as f64 / dbu_per_um,
+            bb.x0.0 as f64 / dbu_per_um,
+            bb.y0.0 as f64 / dbu_per_um,
+            bb.x1.0 as f64 / dbu_per_um,
+            bb.y1.0 as f64 / dbu_per_um,
             w_um,
             h_um,
             w_um / 1000.0,
@@ -848,7 +848,7 @@ fn main() -> Result<()> {
                     datatype: profile.gds_datatype,
                 })
                 .collect();
-            merge_into_gds_multi(&gds_layers, &chip, &output, cell.as_deref(), ox, oy)?;
+            merge_into_gds_multi(&gds_layers, &chip, &output, cell.as_deref(), ox.0, oy.0)?;
 
             // Report placed bounds (with offset)
             let offset_rects: Vec<Rect> = layer_results
@@ -863,10 +863,10 @@ fn main() -> Result<()> {
                 let dbu_per_um = pdk.pdk.db_units_per_um as f64;
                 tracing::info!(
                     "Placed artwork bounds: ({:.2}, {:.2}) to ({:.2}, {:.2}) um",
-                    bb.x0 as f64 / dbu_per_um,
-                    bb.y0 as f64 / dbu_per_um,
-                    bb.x1 as f64 / dbu_per_um,
-                    bb.y1 as f64 / dbu_per_um
+                    bb.x0.0 as f64 / dbu_per_um,
+                    bb.y0.0 as f64 / dbu_per_um,
+                    bb.x1.0 as f64 / dbu_per_um,
+                    bb.y1.0 as f64 / dbu_per_um
                 );
             }
 

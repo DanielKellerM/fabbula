@@ -7,13 +7,14 @@
 //! Loads process design kit parameters from TOML files or built-in definitions.
 //! Provides unit conversion ([`PdkConfig::um_to_dbu`]) and grid snapping.
 
+use crate::polygon::Dbu;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
 /// Convert micrometers to database units given the scale factor.
-pub(crate) fn um_to_dbu(um: f64, db_units_per_um: u32) -> i32 {
-    (um * db_units_per_um as f64).round() as i32
+pub(crate) fn um_to_dbu(um: f64, db_units_per_um: u32) -> Dbu {
+    Dbu((um * db_units_per_um as f64).round() as i32)
 }
 
 /// Built-in PDK identifiers.
@@ -417,7 +418,7 @@ impl PdkConfig {
     }
 
     /// Convert µm to database units
-    pub fn um_to_dbu(&self, um: f64) -> i32 {
+    pub fn um_to_dbu(&self, um: f64) -> Dbu {
         um_to_dbu(um, self.pdk.db_units_per_um)
     }
 
@@ -692,12 +693,12 @@ manufacturing_grid_um = 0.005
     fn test_um_to_dbu() {
         let pdk = PdkConfig::builtin("sky130").unwrap();
         // sky130 has db_units_per_um = 1000, so 1.0 um = 1000 dbu
-        assert_eq!(pdk.um_to_dbu(1.0), 1000);
-        assert_eq!(pdk.um_to_dbu(0.5), 500);
-        assert_eq!(pdk.um_to_dbu(1.6), 1600);
+        assert_eq!(pdk.um_to_dbu(1.0), Dbu(1000));
+        assert_eq!(pdk.um_to_dbu(0.5), Dbu(500));
+        assert_eq!(pdk.um_to_dbu(1.6), Dbu(1600));
         // Also test the free function directly
-        assert_eq!(um_to_dbu(1.0, 1000), 1000);
-        assert_eq!(um_to_dbu(2.5, 2000), 5000);
+        assert_eq!(um_to_dbu(1.0, 1000), Dbu(1000));
+        assert_eq!(um_to_dbu(2.5, 2000), Dbu(5000));
     }
 
     #[test]

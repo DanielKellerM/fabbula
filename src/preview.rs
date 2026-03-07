@@ -34,11 +34,11 @@ pub fn write_svg_multi(
     let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
     let bb = bounding_box_refs(&all_rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
 
-    let margin = ((bb.width().max(bb.height())) as f64 * 0.02) as i32;
-    let vb_x = bb.x0 - margin;
-    let vb_y = bb.y0 - margin;
-    let vb_w = bb.width() + 2 * margin;
-    let vb_h = bb.height() + 2 * margin;
+    let margin = (bb.width().max(bb.height()).0 as f64 * 0.02) as i32;
+    let vb_x = bb.x0.0 - margin;
+    let vb_y = bb.y0.0 - margin;
+    let vb_w = bb.width().0 + 2 * margin;
+    let vb_h = bb.height().0 + 2 * margin;
 
     let svg_w = (vb_w as f64 * scale) as u32;
     let svg_h = (vb_h as f64 * scale) as u32;
@@ -75,10 +75,10 @@ pub fn write_svg_multi(
             writeln!(
                 f,
                 r#"    <rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
-                rect.x0,
-                rect.y0,
-                rect.width(),
-                rect.height(),
+                rect.x0.0,
+                rect.y0.0,
+                rect.width().0,
+                rect.height().0,
                 layer.color
             )?;
         }
@@ -154,14 +154,14 @@ fn write_html_preview_inner(
 ) -> Result<()> {
     let bb = *bb;
     let dbu = pdk.pdk.db_units_per_um as f64;
-    let width_um = bb.width() as f64 / dbu;
-    let height_um = bb.height() as f64 / dbu;
+    let width_um = bb.width().0 as f64 / dbu;
+    let height_um = bb.height().0 as f64 / dbu;
 
-    let margin = ((bb.width().max(bb.height())) as f64 * 0.02) as i32;
-    let vb_x = bb.x0 - margin;
-    let vb_y = bb.y0 - margin;
-    let vb_w = bb.width() + 2 * margin;
-    let vb_h = bb.height() + 2 * margin;
+    let margin = (bb.width().max(bb.height()).0 as f64 * 0.02) as i32;
+    let vb_x = bb.x0.0 - margin;
+    let vb_y = bb.y0.0 - margin;
+    let vb_w = bb.width().0 + 2 * margin;
+    let vb_h = bb.height().0 + 2 * margin;
     let flip_y = vb_y * 2 + vb_h;
     let sw = (vb_w.max(vb_h) as f64 * 0.002) as i32;
 
@@ -250,15 +250,15 @@ fn write_html_preview_inner(
                 f,
                 "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\" class=\"r\" \
                  data-x0=\"{}\" data-y0=\"{}\" data-x1=\"{}\" data-y1=\"{}\" data-layer=\"{}\"/>",
-                rect.x0,
-                rect.y0,
-                rect.width(),
-                rect.height(),
+                rect.x0.0,
+                rect.y0.0,
+                rect.width().0,
+                rect.height().0,
                 layer.color,
-                rect.x0,
-                rect.y0,
-                rect.x1,
-                rect.y1,
+                rect.x0.0,
+                rect.y0.0,
+                rect.x1.0,
+                rect.y1.0,
                 layer.name
             )?;
         }
@@ -373,8 +373,8 @@ pub fn write_deep_zoom_preview(
     let bb = bounding_box_refs(&all_rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
     let total_polys: usize = layers.iter().map(|l| l.rects.len()).sum();
     let dbu = pdk.pdk.db_units_per_um as f64;
-    let width_um = bb.width() as f64 / dbu;
-    let height_um = bb.height() as f64 / dbu;
+    let width_um = bb.width().0 as f64 / dbu;
+    let height_um = bb.height().0 as f64 / dbu;
 
     // Compute tile dir relative path from HTML file location
     let html_dir = output.parent().unwrap_or(Path::new("."));

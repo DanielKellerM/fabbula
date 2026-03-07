@@ -78,15 +78,19 @@ fn make_boundary(
     offset_x: i32,
     offset_y: i32,
 ) -> GdsBoundary {
+    let x0 = rect.x0.0 + offset_x;
+    let y0 = rect.y0.0 + offset_y;
+    let x1 = rect.x1.0 + offset_x;
+    let y1 = rect.y1.0 + offset_y;
     GdsBoundary {
         layer,
         datatype,
         xy: vec![
-            GdsPoint::new(rect.x0 + offset_x, rect.y0 + offset_y),
-            GdsPoint::new(rect.x1 + offset_x, rect.y0 + offset_y),
-            GdsPoint::new(rect.x1 + offset_x, rect.y1 + offset_y),
-            GdsPoint::new(rect.x0 + offset_x, rect.y1 + offset_y),
-            GdsPoint::new(rect.x0 + offset_x, rect.y0 + offset_y),
+            GdsPoint::new(x0, y0),
+            GdsPoint::new(x1, y0),
+            GdsPoint::new(x1, y1),
+            GdsPoint::new(x0, y1),
+            GdsPoint::new(x0, y0),
         ],
         ..Default::default()
     }

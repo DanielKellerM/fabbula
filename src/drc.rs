@@ -8,7 +8,7 @@
 //! minimum spacing, wide-metal spacing, minimum area, and metal density.
 
 use crate::pdk::{DrcRules, um_to_dbu};
-use crate::polygon::{Point, Rect, bounding_box};
+use crate::polygon::{Dbu, Point, Rect, bounding_box};
 use rayon::prelude::*;
 use rstar::{AABB, RTree, RTreeObject};
 
@@ -111,7 +111,10 @@ impl RTreeObject for IndexedRect {
     type Envelope = AABB<[i32; 2]>;
 
     fn envelope(&self) -> Self::Envelope {
-        AABB::from_corners([self.rect.x0, self.rect.y0], [self.rect.x1, self.rect.y1])
+        AABB::from_corners(
+            [self.rect.x0.0, self.rect.y0.0],
+            [self.rect.x1.0, self.rect.y1.0],
+        )
     }
 }
 
@@ -132,15 +135,15 @@ fn capped(violations: &[DrcViolation], cap: Option<usize>) -> bool {
 }
 
 /// Manhattan distance between two non-overlapping rectangles.
-/// Returns 0 if they touch or overlap.
+/// Returns `Dbu(0)` if they touch or overlap.
 #[inline]
-fn rect_spacing(a: &Rect, b: &Rect) -> i32 {
+fn rect_spacing(a: &Rect, b: &Rect) -> Dbu {
     let dx = if a.x1 <= b.x0 {
         b.x0 - a.x1
     } else if b.x1 <= a.x0 {
         a.x0 - b.x1
     } else {
-        0
+        Dbu(0)
     };
 
     let dy = if a.y1 <= b.y0 {
@@ -148,11 +151,11 @@ fn rect_spacing(a: &Rect, b: &Rect) -> i32 {
     } else if b.y1 <= a.y0 {
         a.y0 - b.y1
     } else {
-        0
+        Dbu(0)
     };
 
     // Manhattan spacing for DRC is typically checked per-axis
-    if dx > 0 && dy > 0 {
+    if dx > Dbu(0) && dy > Dbu(0) {
         dx.min(dy)
     } else {
         dx.max(dy)
@@ -188,7 +191,7 @@ pub fn check_drc_capped(
     let min_s_dbu = um_to_dbu(drc.min_spacing, db_units_per_um);
     let min_area_dbu2 = if drc.min_area > 0.0 {
         let side = um_to_dbu(drc.min_area.sqrt(), db_units_per_um);
-        (side as i64) * (side as i64)
+        (side.0 as i64) * (side.0 as i64)
     } else {
         0
     };
@@ -214,16 +217,16 @@ pub fn check_drc_capped(
                     rule: DrcRule::MinWidth,
                     rect_index: idx,
                     other_index: 0,
-                    value: r.width() as i64,
-                    limit: min_w_dbu as i64,
+                    value: r.width().0 as i64,
+                    limit: min_w_dbu.0 as i64,
                     location: loc,
                 });
                 let height_v = (r.height() < min_w_dbu).then(|| DrcViolation {
                     rule: DrcRule::MinWidth,
                     rect_index: idx,
                     other_index: 0,
-                    value: r.height() as i64,
-                    limit: min_w_dbu as i64,
+                    value: r.height().0 as i64,
+                    limit: min_w_dbu.0 as i64,
                     location: loc,
                 });
                 let max_w_v = max_w_dbu.and_then(|max_w| {
@@ -231,8 +234,8 @@ pub fn check_drc_capped(
                         rule: DrcRule::MaxWidth,
                         rect_index: idx,
                         other_index: 0,
-                        value: r.width().max(r.height()) as i64,
-                        limit: max_w as i64,
+                        value: r.width().max(r.height()).0 as i64,
+                        limit: max_w.0 as i64,
                         location: loc,
                     })
                 });
@@ -265,8 +268,8 @@ pub fn check_drc_capped(
                     rule: DrcRule::MinWidth,
                     rect_index: idx,
                     other_index: 0,
-                    value: r.width() as i64,
-                    limit: min_w_dbu as i64,
+                    value: r.width().0 as i64,
+                    limit: min_w_dbu.0 as i64,
                     location: loc,
                 });
             }
@@ -275,8 +278,8 @@ pub fn check_drc_capped(
                     rule: DrcRule::MinWidth,
                     rect_index: idx,
                     other_index: 0,
-                    value: r.height() as i64,
-                    limit: min_w_dbu as i64,
+                    value: r.height().0 as i64,
+                    limit: min_w_dbu.0 as i64,
                     location: loc,
                 });
             }
@@ -287,8 +290,8 @@ pub fn check_drc_capped(
                     rule: DrcRule::MaxWidth,
                     rect_index: idx,
                     other_index: 0,
-                    value: r.width().max(r.height()) as i64,
-                    limit: max_w as i64,
+                    value: r.width().max(r.height()).0 as i64,
+                    limit: max_w.0 as i64,
                     location: loc,
                 });
             }
@@ -313,21 +316,20 @@ pub fn check_drc_capped(
         Some(ws) => min_s_dbu.max(ws),
         None => min_s_dbu,
     };
+    let sm = search_margin.0; // extract for AABB arithmetic
 
     if use_parallel {
         let spacing_violations: Vec<DrcViolation> = rects
             .par_iter()
             .enumerate()
             .flat_map_iter(|(i, r)| {
-                let search_env = AABB::from_corners(
-                    [r.x0 - search_margin, r.y0 - search_margin],
-                    [r.x1 + search_margin, r.y1 + search_margin],
-                );
+                let search_env =
+                    AABB::from_corners([r.x0.0 - sm, r.y0.0 - sm], [r.x1.0 + sm, r.y1.0 + sm]);
                 tree.locate_in_envelope_intersecting(&search_env)
                     .filter(move |neighbor| neighbor.index as usize > i)
                     .filter_map(move |neighbor| {
                         let dist = rect_spacing(r, &neighbor.rect);
-                        if dist <= 0 {
+                        if dist <= Dbu(0) {
                             return None;
                         }
                         let (effective_spacing, rule_kind) =
@@ -347,8 +349,8 @@ pub fn check_drc_capped(
                             rule: rule_kind,
                             rect_index: i as u32,
                             other_index: neighbor.index,
-                            value: dist as i64,
-                            limit: effective_spacing as i64,
+                            value: dist.0 as i64,
+                            limit: effective_spacing.0 as i64,
                             location: Point::new(r.x0, r.y0),
                         })
                     })
@@ -360,16 +362,14 @@ pub fn check_drc_capped(
             if capped(&violations, max_violations) {
                 return violations;
             }
-            let search_env = AABB::from_corners(
-                [r.x0 - search_margin, r.y0 - search_margin],
-                [r.x1 + search_margin, r.y1 + search_margin],
-            );
+            let search_env =
+                AABB::from_corners([r.x0.0 - sm, r.y0.0 - sm], [r.x1.0 + sm, r.y1.0 + sm]);
             for neighbor in tree.locate_in_envelope_intersecting(&search_env) {
                 if (neighbor.index as usize) <= i {
                     continue;
                 }
                 let dist = rect_spacing(r, &neighbor.rect);
-                if dist <= 0 {
+                if dist <= Dbu(0) {
                     continue;
                 }
                 let (effective_spacing, rule_kind) =
@@ -390,8 +390,8 @@ pub fn check_drc_capped(
                         rule: rule_kind,
                         rect_index: i as u32,
                         other_index: neighbor.index,
-                        value: dist as i64,
-                        limit: effective_spacing as i64,
+                        value: dist.0 as i64,
+                        limit: effective_spacing.0 as i64,
                         location: Point::new(r.x0, r.y0),
                     });
                 }
@@ -425,7 +425,7 @@ fn check_density(
         None => return,
     };
 
-    let window_dbu = um_to_dbu(drc.density_window_um, db_units_per_um);
+    let window_dbu = um_to_dbu(drc.density_window_um, db_units_per_um).0;
     if window_dbu <= 0 {
         return;
     }
@@ -438,10 +438,12 @@ fn check_density(
     let density_min_permille = (drc.density_min * 1000.0) as i64;
 
     // Grid covers bounding box; each cell = step x step dbu
-    let grid_x0 = bb.x0;
-    let grid_y0 = bb.y0;
-    let grid_w = ((bb.x1 - bb.x0) as usize).div_ceil(step as usize);
-    let grid_h = ((bb.y1 - bb.y0) as usize).div_ceil(step as usize);
+    let grid_x0 = bb.x0.0;
+    let grid_y0 = bb.y0.0;
+    let bb_x1 = bb.x1.0;
+    let bb_y1 = bb.y1.0;
+    let grid_w = ((bb_x1 - grid_x0) as usize).div_ceil(step as usize);
+    let grid_h = ((bb_y1 - grid_y0) as usize).div_ceil(step as usize);
 
     if grid_w == 0 || grid_h == 0 {
         return;
@@ -452,18 +454,18 @@ fn check_density(
     let full_cell_area = step as i64 * step as i64;
     let mut grid = vec![0i64; grid_w * grid_h];
     for r in rects {
-        let gx0 = ((r.x0 - grid_x0) / step).max(0) as usize;
-        let gy0 = ((r.y0 - grid_y0) / step).max(0) as usize;
-        let gx1 = (((r.x1 - grid_x0) + step - 1) / step).max(0) as usize;
-        let gy1 = (((r.y1 - grid_y0) + step - 1) / step).max(0) as usize;
+        let gx0 = ((r.x0.0 - grid_x0) / step).max(0) as usize;
+        let gy0 = ((r.y0.0 - grid_y0) / step).max(0) as usize;
+        let gx1 = (((r.x1.0 - grid_x0) + step - 1) / step).max(0) as usize;
+        let gy1 = (((r.y1.0 - grid_y0) + step - 1) / step).max(0) as usize;
         let gx1 = gx1.min(grid_w);
         let gy1 = gy1.min(grid_h);
 
         // Interior range: cells fully covered by rect (no clipping needed)
-        let igx0 = ((r.x0 - grid_x0 + step - 1) / step).max(0) as usize;
-        let igy0 = ((r.y0 - grid_y0 + step - 1) / step).max(0) as usize;
-        let igx1 = ((r.x1 - grid_x0) / step).max(0) as usize;
-        let igy1 = ((r.y1 - grid_y0) / step).max(0) as usize;
+        let igx0 = ((r.x0.0 - grid_x0 + step - 1) / step).max(0) as usize;
+        let igy0 = ((r.y0.0 - grid_y0 + step - 1) / step).max(0) as usize;
+        let igx1 = ((r.x1.0 - grid_x0) / step).max(0) as usize;
+        let igy1 = ((r.y1.0 - grid_y0) / step).max(0) as usize;
         let igx1 = igx1.min(grid_w);
         let igy1 = igy1.min(grid_h);
 
@@ -473,10 +475,10 @@ fn check_density(
                 if is_interior_y && gx >= igx0 && gx < igx1 {
                     grid[gy * grid_w + gx] += full_cell_area;
                 } else {
-                    let cx0 = (grid_x0 + gx as i32 * step).max(r.x0);
-                    let cy0 = (grid_y0 + gy as i32 * step).max(r.y0);
-                    let cx1 = (grid_x0 + (gx as i32 + 1) * step).min(r.x1);
-                    let cy1 = (grid_y0 + (gy as i32 + 1) * step).min(r.y1);
+                    let cx0 = (grid_x0 + gx as i32 * step).max(r.x0.0);
+                    let cy0 = (grid_y0 + gy as i32 * step).max(r.y0.0);
+                    let cx1 = (grid_x0 + (gx as i32 + 1) * step).min(r.x1.0);
+                    let cy1 = (grid_y0 + (gy as i32 + 1) * step).min(r.y1.0);
                     if cx1 > cx0 && cy1 > cy0 {
                         grid[gy * grid_w + gx] += (cx1 - cx0) as i64 * (cy1 - cy0) as i64;
                     }
@@ -504,16 +506,16 @@ fn check_density(
 
     if use_parallel {
         // Compute window grid dimensions for allocation-free parallel iteration
-        let nx = ((bb.x1 - bb.x0 - window_dbu) / step + 1).max(0) as usize;
-        let ny = ((bb.y1 - bb.y0 - window_dbu) / step + 1).max(0) as usize;
+        let nx = ((bb_x1 - grid_x0 - window_dbu) / step + 1).max(0) as usize;
+        let ny = ((bb_y1 - grid_y0 - window_dbu) / step + 1).max(0) as usize;
 
         let density_violations: Vec<DrcViolation> = (0..nx * ny)
             .into_par_iter()
             .flat_map_iter(|idx| {
                 let ix = idx / ny;
                 let iy = idx % ny;
-                let wx = bb.x0 + ix as i32 * step;
-                let wy = bb.y0 + iy as i32 * step;
+                let wx = grid_x0 + ix as i32 * step;
+                let wy = grid_y0 + iy as i32 * step;
                 let gx0 = ((wx - grid_x0) / step) as usize;
                 let gy0 = ((wy - grid_y0) / step) as usize;
                 let gx1 = (gx0 + window_cells).min(grid_w);
@@ -544,10 +546,10 @@ fn check_density(
             .collect();
         violations.extend(density_violations);
     } else {
-        let mut wx = bb.x0;
-        while wx + window_dbu <= bb.x1 {
-            let mut wy = bb.y0;
-            while wy + window_dbu <= bb.y1 {
+        let mut wx = grid_x0;
+        while wx + window_dbu <= bb_x1 {
+            let mut wy = grid_y0;
+            while wy + window_dbu <= bb_y1 {
                 if capped(violations, max_violations) {
                     return;
                 }
@@ -662,7 +664,7 @@ mod tests {
     fn test_width_violation() {
         let drc = basic_rules();
         let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
-        let rects = vec![Rect::new(0, 0, min_w - 1, min_w)];
+        let rects = vec![Rect::new(0, 0, min_w - Dbu(1), min_w)];
         let v = check_drc(&rects, DBU_PER_UM, &drc);
         assert!(v.iter().any(|v| v.rule == DrcRule::MinWidth));
     }
@@ -674,7 +676,12 @@ mod tests {
         let min_s = um_to_dbu(drc.min_spacing, DBU_PER_UM);
         let rects = vec![
             Rect::new(0, 0, min_w, min_w),
-            Rect::new(min_w + min_s - 1, 0, min_w + min_s - 1 + min_w, min_w),
+            Rect::new(
+                min_w + min_s - Dbu(1),
+                0,
+                min_w + min_s - Dbu(1) + min_w,
+                min_w,
+            ),
         ];
         let v = check_drc(&rects, DBU_PER_UM, &drc);
         assert!(v.iter().any(|v| v.rule == DrcRule::MinSpacing));
@@ -759,7 +766,7 @@ mod tests {
     fn test_max_width_violation() {
         let drc = cu_rules();
         let max_w_dbu = um_to_dbu(drc.max_width.unwrap(), DBU_PER_UM);
-        let rects = vec![Rect::new(0, 0, max_w_dbu + 100, 500)];
+        let rects = vec![Rect::new(0, 0, max_w_dbu + Dbu(100), 500)];
         let v = check_drc(&rects, DBU_PER_UM, &drc);
         assert!(
             v.iter().any(|v| v.rule == DrcRule::MaxWidth),
@@ -897,7 +904,7 @@ mod tests {
         let drc = basic_rules();
         let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
         // Rect one dbu below min_width should fail
-        let rects = vec![Rect::new(0, 0, min_w - 1, min_w)];
+        let rects = vec![Rect::new(0, 0, min_w - Dbu(1), min_w)];
         let v = check_drc(&rects, DBU_PER_UM, &drc);
         assert!(
             v.iter().any(|v| v.rule == DrcRule::MinWidth),
@@ -937,7 +944,7 @@ mod tests {
         // Two rects spaced one dbu below min_spacing should fail
         let rects = vec![
             Rect::new(0, 0, size, size),
-            Rect::new(size + min_s - 1, 0, 2 * size + min_s - 1, size),
+            Rect::new(size + min_s - Dbu(1), 0, 2 * size + min_s - Dbu(1), size),
         ];
         let v = check_drc(&rects, DBU_PER_UM, &drc);
         assert!(
@@ -1000,7 +1007,7 @@ mod tests {
         let drc = cu_rules();
         let max_w_dbu = um_to_dbu(drc.max_width.unwrap(), DBU_PER_UM);
         // Rect one dbu above max_width should fail
-        let rects = vec![Rect::new(0, 0, max_w_dbu + 1, 500)];
+        let rects = vec![Rect::new(0, 0, max_w_dbu + Dbu(1), 500)];
         let v = check_drc(&rects, DBU_PER_UM, &drc);
         assert!(
             v.iter().any(|v| v.rule == DrcRule::MaxWidth),
@@ -1078,8 +1085,8 @@ mod tests {
         let min_w = um_to_dbu(drc.min_width, DBU_PER_UM);
         // Two rects that both violate width - should find both even with large cap
         let rects = vec![
-            Rect::new(0, 0, min_w - 1, min_w),
-            Rect::new(5000, 0, 5000 + min_w - 1, min_w),
+            Rect::new(0, 0, min_w - Dbu(1), min_w),
+            Rect::new(5000, 0, Dbu(5000) + min_w - Dbu(1), min_w),
         ];
         let v_uncapped = check_drc(&rects, DBU_PER_UM, &drc);
         let v_capped = check_drc_capped(&rects, DBU_PER_UM, &drc, Some(1000));

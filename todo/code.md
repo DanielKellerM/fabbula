@@ -13,12 +13,11 @@
 
 ## Type Safety
 
-- [ ] **P1** Create `Dbu(i32)` newtype for database units
-  - DBU values (nm) and pixels/micrometers are all raw `i32`/`f64` with no type-level distinction
-  - `polygon.rs`: `um_to_dbu()` returns plain `i32`, easy to mix with pixel coords
-  - `Rect` uses bare `i32` for x0/y0/x1/y1 - should be `Dbu`
-  - Also consider `Micrometers(f64)` for PDK-facing values
-  - Files: `src/polygon.rs`, `src/drc.rs`, `src/pdk.rs`
+- [x] **P1** Create `Dbu(i32)` newtype for database units
+  - Implemented: `Dbu(pub i32)` newtype with full operator overloading
+  - `Point` and `Rect` fields are now `Dbu`, `Rect::new` accepts `impl Into<Dbu>`
+  - `um_to_dbu()` returns `Dbu`, `.0` extraction at FFI boundaries (gds21, rstar)
+  - Files: all src/ modules updated, zero-cost abstraction (newtype compiles away)
 
 - [x] **P1** Create PDK name enum instead of stringly-typed `&str`
   - Added `BuiltinPdk` enum with `FromStr`, `Display`, `name()`, `toml_content()`, `all()`

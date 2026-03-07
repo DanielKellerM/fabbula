@@ -65,4 +65,4 @@ pub mod tiles;
 pub use artwork::{ArtworkBitmap, DitherMode, ThresholdMode};
 pub use drc::{DrcRule, DrcViolation};
 pub use pdk::{BuiltinPdk, DrcRules, LayerVariant, PdkConfig};
-pub use polygon::{PixelPlacement, Point, PolygonStrategy, Rect};
+pub use polygon::{Dbu, PixelPlacement, Point, PolygonStrategy, Rect};

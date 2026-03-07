@@ -34,7 +34,7 @@ fn generate_with_density_loop(
     } else {
         min_w_um + eff_s_um
     };
-    let pitch_dbu = pdk.um_to_dbu(pitch_um);
+    let pitch_dbu = pdk.um_to_dbu(pitch_um).0;
 
     let mut best_rects = generate_polygons(bitmap, pdk, drc_rules, strategy, placement)?;
 
@@ -57,8 +57,8 @@ fn generate_with_density_loop(
             if v.rule != DrcRule::DensityMax {
                 continue;
             }
-            let (wx_dbu, wy_dbu) = (v.location.x, v.location.y);
-            let window_dbu = pdk.um_to_dbu(drc_rules.density_window_um);
+            let (wx_dbu, wy_dbu) = (v.location.x.0, v.location.y.0);
+            let window_dbu = pdk.um_to_dbu(drc_rules.density_window_um).0;
 
             let px_start = (wx_dbu / pitch_dbu).max(0) as u32;
             let px_end_dbu = wx_dbu + window_dbu;

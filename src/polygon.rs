@@ -14,16 +14,124 @@ use crate::pdk::{DrcRules, PdkConfig};
 use anyhow::Result;
 use rayon::prelude::*;
 
+/// A value in database units (typically nanometers).
+///
+/// Wraps `i32` to prevent accidental mixing of DBU values with raw pixel
+/// coordinates, loop indices, or other unrelated integers at compile time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Dbu(pub i32);
+
+impl std::fmt::Display for Dbu {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<i32> for Dbu {
+    #[inline]
+    fn from(v: i32) -> Self {
+        Dbu(v)
+    }
+}
+
+impl From<Dbu> for i32 {
+    #[inline]
+    fn from(v: Dbu) -> Self {
+        v.0
+    }
+}
+
+impl std::ops::Add for Dbu {
+    type Output = Dbu;
+    #[inline]
+    fn add(self, rhs: Dbu) -> Dbu {
+        Dbu(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::Sub for Dbu {
+    type Output = Dbu;
+    #[inline]
+    fn sub(self, rhs: Dbu) -> Dbu {
+        Dbu(self.0 - rhs.0)
+    }
+}
+
+impl std::ops::Mul<i32> for Dbu {
+    type Output = Dbu;
+    #[inline]
+    fn mul(self, rhs: i32) -> Dbu {
+        Dbu(self.0 * rhs)
+    }
+}
+
+impl std::ops::Mul<Dbu> for i32 {
+    type Output = Dbu;
+    #[inline]
+    fn mul(self, rhs: Dbu) -> Dbu {
+        Dbu(self * rhs.0)
+    }
+}
+
+impl std::ops::Div<i32> for Dbu {
+    type Output = Dbu;
+    #[inline]
+    fn div(self, rhs: i32) -> Dbu {
+        Dbu(self.0 / rhs)
+    }
+}
+
+impl std::ops::Div<Dbu> for Dbu {
+    type Output = i32;
+    #[inline]
+    fn div(self, rhs: Dbu) -> i32 {
+        self.0 / rhs.0
+    }
+}
+
+impl std::ops::Rem for Dbu {
+    type Output = Dbu;
+    #[inline]
+    fn rem(self, rhs: Dbu) -> Dbu {
+        Dbu(self.0 % rhs.0)
+    }
+}
+
+impl std::ops::Neg for Dbu {
+    type Output = Dbu;
+    #[inline]
+    fn neg(self) -> Dbu {
+        Dbu(-self.0)
+    }
+}
+
+impl std::ops::AddAssign for Dbu {
+    #[inline]
+    fn add_assign(&mut self, rhs: Dbu) {
+        self.0 += rhs.0;
+    }
+}
+
+impl std::ops::SubAssign for Dbu {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Dbu) {
+        self.0 -= rhs.0;
+    }
+}
+
 /// A 2D point in database units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Point {
-    pub x: i32,
-    pub y: i32,
+    pub x: Dbu,
+    pub y: Dbu,
 }
 
 impl Point {
-    pub fn new(x: i32, y: i32) -> Self {
-        Self { x, y }
+    pub fn new(x: impl Into<Dbu>, y: impl Into<Dbu>) -> Self {
+        Self {
+            x: x.into(),
+            y: y.into(),
+        }
     }
 }
 
@@ -36,16 +144,25 @@ impl std::fmt::Display for Point {
 /// A rectangle in database units (nm typically)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rect {
-    pub x0: i32,
-    pub y0: i32,
-    pub x1: i32,
-    pub y1: i32,
+    pub x0: Dbu,
+    pub y0: Dbu,
+    pub x1: Dbu,
+    pub y1: Dbu,
 }
 
 impl Rect {
     /// Creates a new rectangle, normalizing coordinates so `x0 <= x1` and `y0 <= y1`.
     #[inline]
-    pub fn new(x0: i32, y0: i32, x1: i32, y1: i32) -> Self {
+    pub fn new(
+        x0: impl Into<Dbu>,
+        y0: impl Into<Dbu>,
+        x1: impl Into<Dbu>,
+        y1: impl Into<Dbu>,
+    ) -> Self {
+        let x0 = x0.into();
+        let y0 = y0.into();
+        let x1 = x1.into();
+        let y1 = y1.into();
         Self {
             x0: x0.min(x1),
             y0: y0.min(y1),
@@ -56,20 +173,20 @@ impl Rect {
 
     /// Returns the width of the rectangle (`x1 - x0`) in database units.
     #[inline]
-    pub fn width(&self) -> i32 {
+    pub fn width(&self) -> Dbu {
         self.x1 - self.x0
     }
 
     /// Returns the height of the rectangle (`y1 - y0`) in database units.
     #[inline]
-    pub fn height(&self) -> i32 {
+    pub fn height(&self) -> Dbu {
         self.y1 - self.y0
     }
 
     /// Returns the area of the rectangle in database units squared.
     #[inline]
     pub fn area(&self) -> i64 {
-        self.width() as i64 * self.height() as i64
+        self.width().0 as i64 * self.height().0 as i64
     }
 
     /// Can this rect merge horizontally with another (same y extent, adjacent x)?
@@ -85,11 +202,11 @@ impl Rect {
     /// Convert to GDSII boundary coordinates (closed polygon, 5 points)
     pub fn to_gds_xy(&self) -> Vec<i32> {
         vec![
-            self.x0, self.y0, // bottom-left
-            self.x1, self.y0, // bottom-right
-            self.x1, self.y1, // top-right
-            self.x0, self.y1, // top-left
-            self.x0, self.y0, // close
+            self.x0.0, self.y0.0, // bottom-left
+            self.x1.0, self.y0.0, // bottom-right
+            self.x1.0, self.y1.0, // top-right
+            self.x0.0, self.y1.0, // top-left
+            self.x0.0, self.y0.0, // close
         ]
     }
 }
@@ -184,8 +301,8 @@ pub fn generate_polygons(
     };
 
     // Check for coordinate overflow: max coordinate = (dimension - 1) * pitch + pixel_w
-    let max_x = (bitmap.width as i64 - 1) * pitch_dbu as i64 + pixel_w_dbu as i64;
-    let max_y = (bitmap.height as i64 - 1) * pitch_dbu as i64 + pixel_w_dbu as i64;
+    let max_x = (bitmap.width as i64 - 1) * pitch_dbu.0 as i64 + pixel_w_dbu.0 as i64;
+    let max_y = (bitmap.height as i64 - 1) * pitch_dbu.0 as i64 + pixel_w_dbu.0 as i64;
     anyhow::ensure!(
         max_x <= i32::MAX as i64 && max_y <= i32::MAX as i64,
         "GDS coordinate overflow: artwork extent ({} x {} dbu) exceeds i32 range. \
@@ -194,26 +311,26 @@ pub fn generate_polygons(
         max_y
     );
 
+    // Extract i32 for internal functions that mix with pixel indices
+    let pw = pixel_w_dbu.0;
+    let pt = pitch_dbu.0;
+
     tracing::info!(
         "Generating polygons: pixel={}um, spacing={}um, pitch={}um ({} dbu), strategy={:?}, touching={}, max_merge={}",
         min_w_um,
         eff_s_um,
         pitch_um,
-        pitch_dbu,
+        pt,
         strategy,
         touching,
         max_merge
     );
 
     let raw_rects = match strategy {
-        PolygonStrategy::PixelRects => pixel_rects(bitmap, pixel_w_dbu, pitch_dbu),
-        PolygonStrategy::RowMerge => row_merged_rects(bitmap, pixel_w_dbu, pitch_dbu, max_merge),
-        PolygonStrategy::GreedyMerge => {
-            greedy_merged_rects(bitmap, pixel_w_dbu, pitch_dbu, max_merge)
-        }
-        PolygonStrategy::HistogramMerge => {
-            histogram_merged_rects(bitmap, pixel_w_dbu, pitch_dbu, max_merge)
-        }
+        PolygonStrategy::PixelRects => pixel_rects(bitmap, pw, pt),
+        PolygonStrategy::RowMerge => row_merged_rects(bitmap, pw, pt, max_merge),
+        PolygonStrategy::GreedyMerge => greedy_merged_rects(bitmap, pw, pt, max_merge),
+        PolygonStrategy::HistogramMerge => histogram_merged_rects(bitmap, pw, pt, max_merge),
     };
 
     // Filter out polygons that violate min_area (direct um^2 -> dbu^2 conversion)
@@ -900,8 +1017,8 @@ mod tests {
         let bmp = ArtworkBitmap::from_bools(4, 4, &[true; 16]);
         let rects = histogram_merged_rects(&bmp, 100, 100, 2);
         for r in &rects {
-            assert!(r.width() <= 200, "rect too wide: {}", r.width());
-            assert!(r.height() <= 200, "rect too tall: {}", r.height());
+            assert!(r.width() <= Dbu(200), "rect too wide: {}", r.width());
+            assert!(r.height() <= Dbu(200), "rect too tall: {}", r.height());
         }
         let total_pixels: i64 = rects.iter().map(|r| r.area() / (100 * 100)).sum();
         assert_eq!(total_pixels, 16);
@@ -992,7 +1109,7 @@ mod tests {
         assert_eq!(rects.len(), 3);
         // Each rect should span at most 2 pixels: width = (2-1)*200+100 = 300
         for r in &rects {
-            assert!(r.width() <= 300, "rect too wide: {}", r.width());
+            assert!(r.width() <= Dbu(300), "rect too wide: {}", r.width());
         }
     }
 
@@ -1003,8 +1120,8 @@ mod tests {
         let rects = greedy_merged_rects(&bmp, 100, 100, 2);
         // Max physical size for 2 merged pixels: (2-1)*100+100 = 200
         for r in &rects {
-            assert!(r.width() <= 200, "rect too wide: {}", r.width());
-            assert!(r.height() <= 200, "rect too tall: {}", r.height());
+            assert!(r.width() <= Dbu(200), "rect too wide: {}", r.width());
+            assert!(r.height() <= Dbu(200), "rect too tall: {}", r.height());
         }
         // Total coverage should still be 16 pixels
         let total_pixels: i64 = rects.iter().map(|r| r.area() / (100 * 100)).sum();
@@ -1072,8 +1189,8 @@ mod tests {
         let bmp = ArtworkBitmap::from_bools(1, 1, &[true]);
         let rects = pixel_rects(&bmp, 100, 200);
         assert_eq!(rects.len(), 1);
-        assert_eq!(rects[0].width(), 100);
-        assert_eq!(rects[0].height(), 100);
+        assert_eq!(rects[0].width(), Dbu(100));
+        assert_eq!(rects[0].height(), Dbu(100));
     }
 
     #[test]
@@ -1105,8 +1222,8 @@ mod tests {
     fn test_rect_zero_area() {
         // Rect::new normalizes, so (5,5,5,5) gives width=0, height=0
         let r = Rect::new(5, 5, 5, 5);
-        assert_eq!(r.width(), 0);
-        assert_eq!(r.height(), 0);
+        assert_eq!(r.width(), Dbu(0));
+        assert_eq!(r.height(), Dbu(0));
         assert_eq!(r.area(), 0);
     }
 
@@ -1151,7 +1268,7 @@ mod tests {
         assert!(!rects.is_empty());
         // Verify all rects have positive area
         for r in &rects {
-            assert!(r.width() > 0 && r.height() > 0);
+            assert!(r.width() > Dbu(0) && r.height() > Dbu(0));
         }
     }
 
@@ -1178,7 +1295,7 @@ mod tests {
         .unwrap();
         assert!(!rects.is_empty());
         for r in &rects {
-            assert!(r.width() > 0 && r.height() > 0);
+            assert!(r.width() > Dbu(0) && r.height() > Dbu(0));
         }
     }
 
@@ -1201,8 +1318,8 @@ mod proptests {
             let r = Rect::new(x0, y0, x1, y1);
             prop_assert!(r.x0 <= r.x1, "x0={} > x1={}", r.x0, r.x1);
             prop_assert!(r.y0 <= r.y1, "y0={} > y1={}", r.y0, r.y1);
-            prop_assert!(r.width() >= 0);
-            prop_assert!(r.height() >= 0);
+            prop_assert!(r.width() >= Dbu(0));
+            prop_assert!(r.height() >= Dbu(0));
             prop_assert!(r.area() >= 0);
         }
 
@@ -1248,7 +1365,7 @@ mod proptests {
             let min_width = 100i32;
             let rects = row_merged_rects(&bmp, min_width, pitch, u16::MAX);
             let total_pixels: i64 = rects.iter().map(|r| {
-                let cols = (r.width() - min_width) / pitch + 1;
+                let cols = (r.width() - Dbu(min_width)) / Dbu(pitch) + 1;
                 cols as i64
             }).sum();
             prop_assert_eq!(total_pixels as usize, expected_on);

@@ -29,8 +29,8 @@ pub fn write_lef_multi(
     let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
     let bb = bounding_box_refs(&all_rects).unwrap_or(Rect::new(0, 0, 0, 0));
     let dbu = pdk.pdk.db_units_per_um as f64;
-    let width_um = bb.width() as f64 / dbu;
-    let height_um = bb.height() as f64 / dbu;
+    let width_um = bb.width().0 as f64 / dbu;
+    let height_um = bb.height().0 as f64 / dbu;
 
     let mut f = std::fs::File::create(output)
         .with_context(|| format!("Failed to create LEF file: {}", output.display()))?;
@@ -48,10 +48,10 @@ pub fn write_lef_multi(
     for layer in layers {
         writeln!(f, "    LAYER {} ;", layer.layer_name)?;
         for r in layer.rects {
-            let rx0 = (r.x0 - bb.x0) as f64 / dbu;
-            let ry0 = (r.y0 - bb.y0) as f64 / dbu;
-            let rx1 = (r.x1 - bb.x0) as f64 / dbu;
-            let ry1 = (r.y1 - bb.y0) as f64 / dbu;
+            let rx0 = (r.x0 - bb.x0).0 as f64 / dbu;
+            let ry0 = (r.y0 - bb.y0).0 as f64 / dbu;
+            let rx1 = (r.x1 - bb.x0).0 as f64 / dbu;
+            let ry1 = (r.y1 - bb.y0).0 as f64 / dbu;
             writeln!(f, "      RECT {rx0:.3} {ry0:.3} {rx1:.3} {ry1:.3} ;")?;
         }
     }

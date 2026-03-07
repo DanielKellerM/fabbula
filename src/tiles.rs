@@ -73,8 +73,8 @@ fn render_full_image(
 ) -> Result<resvg::tiny_skia::Pixmap> {
     use resvg::tiny_skia::{Color, Paint, PathBuilder, Pixmap, Transform};
 
-    let art_w = bb.width() as f64;
-    let art_h = bb.height() as f64;
+    let art_w = bb.width().0 as f64;
+    let art_h = bb.height().0 as f64;
     let aspect = art_w / art_h;
 
     let (px_w, px_h) = if aspect >= 1.0 {
@@ -105,10 +105,10 @@ fn render_full_image(
 
         for rect in layer.rects {
             // Transform from artwork coords to pixel coords (y-flip)
-            let px_x = (rect.x0 - bb.x0) as f64 * scale_x;
-            let px_y = (bb.y1 - rect.y1) as f64 * scale_y; // flip Y
-            let px_w = rect.width() as f64 * scale_x;
-            let px_h = rect.height() as f64 * scale_y;
+            let px_x = (rect.x0 - bb.x0).0 as f64 * scale_x;
+            let px_y = (bb.y1 - rect.y1).0 as f64 * scale_y; // flip Y
+            let px_w = rect.width().0 as f64 * scale_x;
+            let px_h = rect.height().0 as f64 * scale_y;
 
             let Some(r) = resvg::tiny_skia::Rect::from_xywh(
                 px_x as f32,
@@ -255,14 +255,14 @@ fn count_tiles(w: u32, h: u32, ts: u32, levels: u32) -> u32 {
 
 /// Compute a density grid counting polygons per cell.
 fn compute_density_grid(layers: &[TileLayer], bb: &Rect, grid_size: u32) -> Vec<Vec<u32>> {
-    let cell_w = bb.width() as f64 / grid_size as f64;
-    let cell_h = bb.height() as f64 / grid_size as f64;
+    let cell_w = bb.width().0 as f64 / grid_size as f64;
+    let cell_h = bb.height().0 as f64 / grid_size as f64;
     let mut grid = vec![vec![0u32; grid_size as usize]; grid_size as usize];
 
     for layer in layers {
         for rect in layer.rects {
-            let cx = ((rect.x0 - bb.x0) as f64 / cell_w) as u32;
-            let cy = ((rect.y0 - bb.y0) as f64 / cell_h) as u32;
+            let cx = ((rect.x0 - bb.x0).0 as f64 / cell_w) as u32;
+            let cy = ((rect.y0 - bb.y0).0 as f64 / cell_h) as u32;
             let cx = cx.min(grid_size - 1) as usize;
             let cy = cy.min(grid_size - 1) as usize;
             grid[cy][cx] += 1;
@@ -321,10 +321,10 @@ fn write_polygon_json(layers: &[TileLayer], bb: &Rect, output_dir: &Path) -> Res
     write!(
         f,
         r#"{{"ox":{},"oy":{},"bb_w":{},"bb_h":{},"layers":["#,
-        bb.x0,
-        bb.y0,
-        bb.width(),
-        bb.height()
+        bb.x0.0,
+        bb.y0.0,
+        bb.width().0,
+        bb.height().0
     )?;
     for (li, layer) in layers.iter().enumerate() {
         if li > 0 {
@@ -342,10 +342,10 @@ fn write_polygon_json(layers: &[TileLayer], bb: &Rect, output_dir: &Path) -> Res
             write!(
                 f,
                 "[{},{},{},{}]",
-                rect.x0 - bb.x0,
-                rect.y0 - bb.y0,
-                rect.x1 - bb.x0,
-                rect.y1 - bb.y0,
+                (rect.x0 - bb.x0).0,
+                (rect.y0 - bb.y0).0,
+                (rect.x1 - bb.x0).0,
+                (rect.y1 - bb.y0).0,
             )?;
         }
         write!(f, "]}}")?;

@@ -9,10 +9,10 @@
 
 use fabbula::drc::{DrcRule, DrcViolation, check_drc};
 use fabbula::pdk::{DrcRules, PdkConfig};
-use fabbula::polygon::Rect;
+use fabbula::polygon::{Dbu, Rect};
 
 /// Helper: convert um to dbu for a given PDK.
-fn dbu(pdk: &PdkConfig, um: f64) -> i32 {
+fn dbu(pdk: &PdkConfig, um: f64) -> fabbula::polygon::Dbu {
     pdk.um_to_dbu(um)
 }
 
@@ -54,7 +54,7 @@ fn clean_rects_all_pdks() {
         // Size must satisfy both min_width and min_area
         let min_area_dbu2 = (drc.min_area * (u as f64 * u as f64)) as i32;
         let min_side_for_area = if min_area_dbu2 > 0 {
-            ((min_area_dbu2 as f64).sqrt().ceil() as i32).max(min_w)
+            Dbu((min_area_dbu2 as f64).sqrt().ceil() as i32).max(min_w)
         } else {
             min_w
         };
@@ -84,7 +84,7 @@ fn min_width_violation_all_pdks() {
         let u = pdk.pdk.db_units_per_um;
         let min_w = dbu(&pdk, drc.min_width);
         // One dimension below min_width
-        let rects = vec![Rect::new(0, 0, min_w - 1, min_w * 2)];
+        let rects = vec![Rect::new(0, 0, min_w - Dbu(1), min_w * 2)];
         let v = check_drc(&rects, u, &drc);
         assert!(
             has_rule(&v, DrcRule::MinWidth),
@@ -108,7 +108,7 @@ fn min_spacing_violation_all_pdks() {
         // Gap = min_spacing - 1 dbu
         let rects = vec![
             Rect::new(0, 0, size, size),
-            Rect::new(size + min_s - 1, 0, 2 * size + min_s - 1, size),
+            Rect::new(size + min_s - Dbu(1), 0, 2 * size + min_s - Dbu(1), size),
         ];
         let v = check_drc(&rects, u, &drc);
         assert!(
@@ -129,7 +129,7 @@ fn max_width_violation_where_defined() {
         let u = pdk.pdk.db_units_per_um;
         if let Some(max_w) = drc.max_width {
             let max_w_dbu = dbu(&pdk, max_w);
-            let rects = vec![Rect::new(0, 0, max_w_dbu + 100, 500)];
+            let rects = vec![Rect::new(0, 0, max_w_dbu + Dbu(100), 500)];
             let v = check_drc(&rects, u, &drc);
             assert!(
                 has_rule(&v, DrcRule::MaxWidth),
@@ -183,7 +183,7 @@ fn wide_metal_spacing_clean_for_small_rects() {
             let min_s_dbu = dbu(&pdk, drc.min_spacing);
             let thresh_dbu = dbu(&pdk, thresh);
             // Rects must be below the threshold in both dimensions
-            let size = min_w_dbu.min(thresh_dbu - 1);
+            let size = min_w_dbu.min(thresh_dbu - Dbu(1));
             if size < min_w_dbu {
                 // Can't make rects that are both >= min_width and < threshold, skip
                 continue;

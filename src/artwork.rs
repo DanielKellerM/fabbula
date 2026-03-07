@@ -503,12 +503,13 @@ pub fn apply_exclusion_mask(
     bitmap: &mut ArtworkBitmap,
     exclusion_rects: &[crate::polygon::Rect],
     pdk: &PdkConfig,
-    margin_dbu: i32,
+    margin_dbu: crate::polygon::Dbu,
 ) {
     let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
     let min_s_um = pdk.snap_to_grid(pdk.drc.min_spacing);
-    let pitch_dbu = pdk.um_to_dbu(min_w_um + min_s_um);
-    let pixel_w_dbu = pdk.um_to_dbu(min_w_um);
+    let pitch_dbu = pdk.um_to_dbu(min_w_um + min_s_um).0;
+    let pixel_w_dbu = pdk.um_to_dbu(min_w_um).0;
+    let margin = margin_dbu.0;
 
     if pitch_dbu <= 0 || pixel_w_dbu <= 0 {
         return;
@@ -521,10 +522,10 @@ pub fn apply_exclusion_mask(
 
     for er in exclusion_rects {
         // Grow by margin
-        let gx0 = er.x0 - margin_dbu;
-        let gy0 = er.y0 - margin_dbu;
-        let gx1 = er.x1 + margin_dbu;
-        let gy1 = er.y1 + margin_dbu;
+        let gx0 = er.x0.0 - margin;
+        let gy0 = er.y0.0 - margin;
+        let gx1 = er.x1.0 + margin;
+        let gy1 = er.y1.0 + margin;
 
         // Inverse mapping: pixel x overlaps grown rect if
         //   x * pitch < gx1  AND  x * pitch + pixel_w > gx0
@@ -1014,7 +1015,7 @@ mod tests {
 
     #[test]
     fn test_exclusion_mask() {
-        use crate::polygon::Rect;
+        use crate::polygon::{Dbu, Rect};
 
         let pdk = crate::pdk::PdkConfig::builtin("sky130").unwrap();
         let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
@@ -1029,7 +1030,7 @@ mod tests {
         // Pixel (1, 0) maps to physical: x=[1*pitch, 1*pitch+pw], y=[(4-1-0)*pitch, 3*pitch+pw]
         let excl = vec![Rect::new(pitch, 3 * pitch, pitch + pw, 3 * pitch + pw)];
 
-        apply_exclusion_mask(&mut bmp, &excl, &pdk, 0);
+        apply_exclusion_mask(&mut bmp, &excl, &pdk, Dbu(0));
         assert!(!bmp.get(1, 0), "Pixel (1,0) should be masked");
         assert!(bmp.get(0, 0), "Pixel (0,0) should remain");
         assert_eq!(bmp.metal_count(), 15);
@@ -1037,7 +1038,7 @@ mod tests {
 
     #[test]
     fn test_exclusion_mask_with_margin() {
-        use crate::polygon::Rect;
+        use crate::polygon::{Dbu, Rect};
 
         let pdk = crate::pdk::PdkConfig::builtin("sky130").unwrap();
         let min_w_um = pdk.snap_to_grid(pdk.drc.min_width);
@@ -1051,8 +1052,8 @@ mod tests {
         let excl = vec![Rect::new(
             pitch + pw / 2,
             3 * pitch + pw / 2,
-            pitch + pw / 2 + 1,
-            3 * pitch + pw / 2 + 1,
+            pitch + pw / 2 + Dbu(1),
+            3 * pitch + pw / 2 + Dbu(1),
         )];
 
         // Large margin should mask pixel (1,0) and possibly neighbors
