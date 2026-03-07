@@ -1,17 +1,13 @@
 <div align="center">
-<table><tr>
-<td><img src="fabbula.png" alt="fabbula" width="200"></td>
-<td>
+
+<img src="fabbula.png" alt="fabbula" width="400">
 
 # fabbula
 
-*A digital dream, to polygons cast,*
-*Through rigorous grids, made ready to last.*
-*A mark in the metal, a tale to be told,*
+*A digital dream, to polygons cast,*<br>
+*Through rigorous grids, made ready to last.*<br>
+*A mark in the metal, a tale to be told,*<br>
 *Your art in the silicon, permanent, bold.*
-
-</td>
-</tr></table>
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![CI](https://img.shields.io/github/actions/workflow/status/DanielKellerM/fabbula/ci.yml?label=CI)](https://github.com/DanielKellerM/fabbula/actions) [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -283,6 +279,14 @@ With inspiration from the [Integrated Information Processing (IIS)](http://asic.
 ## License
 
 Licensed under the **Apache License, Version 2.0** - see [LICENSE](LICENSE).
+
+## Disclaimer
+
+**fabbula has not been used on a production tapeout.** While the tool is designed to produce DRC-clean output and has been validated against published PDK design rules, it has not been silicon-proven. PDK rules encoded in this tool may be incomplete, outdated, or incorrect for your specific process variant or foundry run.
+
+Semiconductor fabrication is expensive and irreversible. Always verify fabbula's output against your foundry's official design rule deck and run the foundry-provided DRC tools before tapeout. Do not rely solely on fabbula's built-in DRC checker for production use.
+
+This software is provided under the Apache License 2.0, **without warranties of any kind**. The authors are not liable for any damages resulting from its use, including but not limited to failed tapeouts, DRC violations, or wasted shuttle runs. By using this software, you accept these terms. See [LICENSE](LICENSE) for the full legal text.
 
 ---
 
