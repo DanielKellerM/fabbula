@@ -752,3 +752,196 @@ pub fn write_deep_zoom_preview(
 
     Ok(output.to_path_buf())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pdk::PdkConfig;
+    use crate::polygon::Rect;
+
+    fn sample_rects() -> Vec<Rect> {
+        vec![
+            Rect::new(0, 0, 100, 100),
+            Rect::new(200, 0, 300, 100),
+            Rect::new(0, 200, 100, 300),
+        ]
+    }
+
+    #[test]
+    fn test_write_svg_single_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.svg");
+        let rects = sample_rects();
+
+        write_svg(&rects, &path, 0.01, "#c0c0c0", None).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("xmlns=\"http://www.w3.org/2000/svg\""),
+            "SVG should contain xmlns declaration"
+        );
+        assert!(
+            content.contains("viewBox="),
+            "SVG should contain viewBox attribute"
+        );
+        assert!(
+            content.contains("<rect"),
+            "SVG should contain at least one rect element"
+        );
+        assert!(
+            content.contains("fill=\"#c0c0c0\""),
+            "SVG should contain the specified fill color"
+        );
+        assert!(content.contains("</svg>"), "SVG should have a closing tag");
+    }
+
+    #[test]
+    fn test_write_svg_multi_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("multi.svg");
+        let rects_a = vec![Rect::new(0, 0, 100, 100)];
+        let rects_b = vec![Rect::new(200, 200, 300, 300)];
+
+        let layers = vec![
+            SvgLayer {
+                rects: &rects_a,
+                color: "#ff0000",
+            },
+            SvgLayer {
+                rects: &rects_b,
+                color: "#00ff00",
+            },
+        ];
+
+        write_svg_multi(&layers, &path, 0.01, None).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("fill=\"#ff0000\""),
+            "SVG should contain the first layer color"
+        );
+        assert!(
+            content.contains("fill=\"#00ff00\""),
+            "SVG should contain the second layer color"
+        );
+    }
+
+    #[test]
+    fn test_write_svg_with_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bg.svg");
+        let rects = sample_rects();
+
+        write_svg(&rects, &path, 0.01, "#c0c0c0", Some("#1a1a2e")).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("fill=\"#1a1a2e\""),
+            "SVG should contain the background fill color"
+        );
+        // The background rect appears before the transform group
+        let bg_pos = content.find("fill=\"#1a1a2e\"").unwrap();
+        let group_pos = content.find("<g transform=").unwrap();
+        assert!(
+            bg_pos < group_pos,
+            "Background rect should appear before the artwork group"
+        );
+    }
+
+    #[test]
+    fn test_write_svg_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.svg");
+        let rects: Vec<Rect> = vec![];
+
+        write_svg(&rects, &path, 0.01, "#c0c0c0", None).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("viewBox="),
+            "Empty SVG should still have a viewBox (fallback bounding box)"
+        );
+        assert!(
+            content.contains("xmlns=\"http://www.w3.org/2000/svg\""),
+            "Empty SVG should still be a valid SVG document"
+        );
+        assert!(
+            content.contains("</svg>"),
+            "Empty SVG should have a closing tag"
+        );
+    }
+
+    #[test]
+    fn test_write_html_preview_single() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview.html");
+        let rects = sample_rects();
+        let pdk = PdkConfig::builtin("sky130").unwrap();
+
+        write_html_preview(&rects, &path, &pdk).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("<svg") || content.contains("<canvas"),
+            "HTML should contain an svg or canvas element"
+        );
+        assert!(
+            content.contains("PDK: sky130"),
+            "HTML should display the PDK name"
+        );
+        assert!(
+            content.contains("Polygons: 3"),
+            "HTML should display the polygon count"
+        );
+        assert!(
+            content.contains("fabbula preview"),
+            "HTML should contain the fabbula preview heading"
+        );
+    }
+
+    #[test]
+    fn test_write_html_preview_multi() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("multi.html");
+        let rects_a = vec![Rect::new(0, 0, 100, 100)];
+        let rects_b = vec![Rect::new(200, 200, 300, 300)];
+        let pdk = PdkConfig::builtin("sky130").unwrap();
+
+        let layers = vec![
+            HtmlLayer {
+                rects: &rects_a,
+                name: "metal5",
+                color: "#ff0000",
+            },
+            HtmlLayer {
+                rects: &rects_b,
+                name: "metal4",
+                color: "#00ff00",
+            },
+        ];
+
+        write_html_preview_multi(&layers, &path, &pdk).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("Layers:"),
+            "Multi-layer HTML should contain a layer legend"
+        );
+        assert!(
+            content.contains("metal5"),
+            "Legend should list the first layer name"
+        );
+        assert!(
+            content.contains("metal4"),
+            "Legend should list the second layer name"
+        );
+        assert!(
+            content.contains("#ff0000"),
+            "Legend should include the first layer color"
+        );
+        assert!(
+            content.contains("#00ff00"),
+            "Legend should include the second layer color"
+        );
+    }
+}

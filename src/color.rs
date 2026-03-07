@@ -388,4 +388,147 @@ mod tests {
         assert_eq!(nearest_centroid(&[10.0, 10.0, 10.0], &centroids), 0);
         assert_eq!(nearest_centroid(&[200.0, 200.0, 200.0], &centroids), 1);
     }
+
+    use crate::pdk::{ArtworkLayerProfile, DrcRules};
+    use image::RgbImage;
+
+    fn test_drc_rules() -> DrcRules {
+        DrcRules {
+            min_width: 1.0,
+            min_spacing: 0.5,
+            min_area: 0.0,
+            min_enclosed_area: 0.0,
+            density_min: 0.0,
+            density_max: 1.0,
+            density_window_um: 500.0,
+            max_width: None,
+            wide_metal_threshold: None,
+            wide_metal_spacing: None,
+        }
+    }
+
+    fn test_profile(name: &str, color: Option<&str>) -> ArtworkLayerProfile {
+        ArtworkLayerProfile {
+            name: name.into(),
+            gds_layer: 72,
+            gds_datatype: 20,
+            purpose: String::new(),
+            color: color.map(|c| c.into()),
+            drc: test_drc_rules(),
+        }
+    }
+
+    #[test]
+    fn test_extract_palette_two_colors() {
+        // Create a 10x10 image: left half black, right half white
+        let img = image::ImageBuffer::from_fn(10, 10, |x, _y| {
+            if x < 5 {
+                image::Rgb([0u8, 0, 0])
+            } else {
+                image::Rgb([255u8, 255, 255])
+            }
+        });
+        let tmp = tempfile::NamedTempFile::with_suffix(".png").unwrap();
+        img.save(tmp.path()).unwrap();
+
+        let results = extract_palette(tmp.path(), 1, None).unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "Expected 1 layer bitmap from 2-color image with num_layers=1"
+        );
+        let density = results[0].bitmap.density();
+        assert!(
+            density > 0.0 && density < 1.0,
+            "Density should be between 0 and 1, got {}",
+            density
+        );
+    }
+
+    #[test]
+    fn test_extract_palette_three_colors() {
+        // Create a 9x3 image with 3 distinct color regions: red, green, blue
+        let img = image::ImageBuffer::from_fn(9, 3, |x, _y| {
+            if x < 3 {
+                image::Rgb([255u8, 0, 0])
+            } else if x < 6 {
+                image::Rgb([0u8, 255, 0])
+            } else {
+                image::Rgb([0u8, 0, 255])
+            }
+        });
+        let tmp = tempfile::NamedTempFile::with_suffix(".png").unwrap();
+        img.save(tmp.path()).unwrap();
+
+        // num_layers=2 means 3 clusters total, brightest dropped as background
+        let results = extract_palette(tmp.path(), 2, None).unwrap();
+        assert_eq!(
+            results.len(),
+            2,
+            "Expected 2 layer bitmaps from 3-color image with num_layers=2"
+        );
+        // Each layer should have non-zero density
+        for (i, lb) in results.iter().enumerate() {
+            assert!(
+                lb.bitmap.density() > 0.0,
+                "Layer {} density should be > 0, got {}",
+                i,
+                lb.bitmap.density()
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_channels_rgb() {
+        let profiles = vec![
+            test_profile("met5_r", Some("red")),
+            test_profile("met5_g", Some("green")),
+            test_profile("met5_b", Some("blue")),
+        ];
+
+        // Create a 4x4 image with varied colors
+        let img = image::ImageBuffer::from_fn(4, 4, |x, y| {
+            let r = if x < 2 { 255u8 } else { 0 };
+            let g = if y < 2 { 255u8 } else { 0 };
+            let b = if (x + y) % 2 == 0 { 255u8 } else { 0 };
+            image::Rgb([r, g, b])
+        });
+        let tmp = tempfile::NamedTempFile::with_suffix(".png").unwrap();
+        img.save(tmp.path()).unwrap();
+
+        let results =
+            extract_channels(tmp.path(), &profiles, ThresholdMode::Luminance(128), None).unwrap();
+        assert_eq!(
+            results.len(),
+            3,
+            "Expected 3 LayerBitmaps for R/G/B profiles"
+        );
+        // Verify each result maps to the correct profile index
+        let indices: Vec<usize> = results.iter().map(|lb| lb.layer_index).collect();
+        assert!(indices.contains(&0), "Should contain layer_index 0 (red)");
+        assert!(indices.contains(&1), "Should contain layer_index 1 (green)");
+        assert!(indices.contains(&2), "Should contain layer_index 2 (blue)");
+    }
+
+    #[test]
+    fn test_extract_channels_no_color_field() {
+        let profiles = vec![test_profile("met5_a", None), test_profile("met5_b", None)];
+
+        // Create a minimal image
+        let img: RgbImage = RgbImage::new(2, 2);
+        let tmp = tempfile::NamedTempFile::with_suffix(".png").unwrap();
+        img.save(tmp.path()).unwrap();
+
+        let result = extract_channels(tmp.path(), &profiles, ThresholdMode::Luminance(128), None);
+        assert!(
+            result.is_err(),
+            "extract_channels should fail when no profiles have a color field"
+        );
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(
+            err_msg.contains("color"),
+            "Error message should mention 'color', got: {}",
+            err_msg
+        );
+    }
 }

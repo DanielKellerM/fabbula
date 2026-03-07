@@ -365,4 +365,222 @@ mod tests {
         let snapped = pdk.snap_to_grid(1.603);
         assert!((snapped - 1.605).abs() < 1e-9 || (snapped - 1.600).abs() < 1e-9);
     }
+
+    #[test]
+    fn test_effective_spacing_no_wide_metal() {
+        let pdk = PdkConfig::builtin("sky130").unwrap();
+        // sky130 primary drc has no wide_metal_threshold
+        assert!(pdk.drc.wide_metal_threshold.is_none());
+        assert!((pdk.drc.effective_spacing() - pdk.drc.min_spacing).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_effective_spacing_wide_metal_triggers() {
+        let mut pdk = PdkConfig::builtin("sky130").unwrap();
+        // Set threshold <= 2 * min_width so it triggers
+        pdk.drc.wide_metal_threshold = Some(pdk.drc.min_width * 2.0);
+        pdk.drc.wide_metal_spacing = Some(pdk.drc.min_spacing + 1.0);
+        let expected = pdk.drc.min_spacing + 1.0;
+        assert!((pdk.drc.effective_spacing() - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_effective_spacing_wide_metal_no_trigger() {
+        let mut pdk = PdkConfig::builtin("sky130").unwrap();
+        // Set threshold > 2 * min_width so it does NOT trigger
+        pdk.drc.wide_metal_threshold = Some(pdk.drc.min_width * 2.0 + 1.0);
+        pdk.drc.wide_metal_spacing = Some(pdk.drc.min_spacing + 5.0);
+        assert!((pdk.drc.effective_spacing() - pdk.drc.min_spacing).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_min_width() {
+        let toml_str = r#"
+[pdk]
+name = "bad"
+description = "bad pdk"
+node_nm = 130
+db_units_per_um = 1000
+
+[artwork_layer]
+name = "met1"
+gds_layer = 1
+gds_datatype = 0
+
+[drc]
+min_width = 0.0
+min_spacing = 0.5
+
+[grid]
+manufacturing_grid_um = 0.005
+"#;
+        let config: PdkConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_bad_density_max() {
+        // density_max = 0 should fail
+        let toml_zero = r#"
+[pdk]
+name = "bad"
+description = "bad pdk"
+node_nm = 130
+db_units_per_um = 1000
+
+[artwork_layer]
+name = "met1"
+gds_layer = 1
+gds_datatype = 0
+
+[drc]
+min_width = 1.0
+min_spacing = 0.5
+density_max = 0.0
+
+[grid]
+manufacturing_grid_um = 0.005
+"#;
+        let config: PdkConfig = toml::from_str(toml_zero).unwrap();
+        assert!(config.validate().is_err());
+
+        // density_max = 1.5 should also fail
+        let toml_over = r#"
+[pdk]
+name = "bad"
+description = "bad pdk"
+node_nm = 130
+db_units_per_um = 1000
+
+[artwork_layer]
+name = "met1"
+gds_layer = 1
+gds_datatype = 0
+
+[drc]
+min_width = 1.0
+min_spacing = 0.5
+density_max = 1.5
+
+[grid]
+manufacturing_grid_um = 0.005
+"#;
+        let config_over: PdkConfig = toml::from_str(toml_over).unwrap();
+        assert!(config_over.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_max_width_below_min() {
+        let toml_str = r#"
+[pdk]
+name = "bad"
+description = "bad pdk"
+node_nm = 130
+db_units_per_um = 1000
+
+[artwork_layer]
+name = "met1"
+gds_layer = 1
+gds_datatype = 0
+
+[drc]
+min_width = 1.0
+min_spacing = 0.5
+max_width = 0.5
+
+[grid]
+manufacturing_grid_um = 0.005
+"#;
+        let config: PdkConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_layer_profiles_single() {
+        let pdk = PdkConfig::builtin("sky130").unwrap();
+        // sky130 default has artwork_layer but we need to check without alt
+        let mut pdk_no_alt = pdk.clone();
+        pdk_no_alt.artwork_layer_alt = None;
+        pdk_no_alt.drc_alt = None;
+        let profiles = pdk_no_alt.layer_profiles();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, pdk_no_alt.artwork_layer.name);
+        assert_eq!(profiles[0].gds_layer, pdk_no_alt.artwork_layer.gds_layer);
+    }
+
+    #[test]
+    fn test_layer_profiles_with_alt() {
+        let pdk = PdkConfig::builtin("sky130").unwrap();
+        // sky130 has both artwork_layer_alt and drc_alt
+        assert!(pdk.artwork_layer_alt.is_some());
+        assert!(pdk.drc_alt.is_some());
+        let profiles = pdk.layer_profiles();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].name, "met5");
+        assert_eq!(profiles[1].name, "met4");
+    }
+
+    #[test]
+    fn test_from_file_valid() {
+        use std::io::Write;
+        let toml_str = r#"
+[pdk]
+name = "test"
+description = "test pdk"
+node_nm = 130
+db_units_per_um = 1000
+
+[artwork_layer]
+name = "met5"
+gds_layer = 72
+gds_datatype = 20
+
+[drc]
+min_width = 1.0
+min_spacing = 0.5
+
+[grid]
+manufacturing_grid_um = 0.005
+"#;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "{}", toml_str).unwrap();
+        let config = PdkConfig::from_file(tmp.path()).unwrap();
+        assert_eq!(config.pdk.name, "test");
+        assert_eq!(config.pdk.db_units_per_um, 1000);
+        assert!((config.drc.min_width - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_from_file_invalid() {
+        use std::io::Write;
+        let bad_toml = "this is not valid toml [[[";
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "{}", bad_toml).unwrap();
+        assert!(PdkConfig::from_file(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn test_um_to_dbu() {
+        let pdk = PdkConfig::builtin("sky130").unwrap();
+        // sky130 has db_units_per_um = 1000, so 1.0 um = 1000 dbu
+        assert_eq!(pdk.um_to_dbu(1.0), 1000);
+        assert_eq!(pdk.um_to_dbu(0.5), 500);
+        assert_eq!(pdk.um_to_dbu(1.6), 1600);
+        // Also test the free function directly
+        assert_eq!(um_to_dbu(1.0, 1000), 1000);
+        assert_eq!(um_to_dbu(2.5, 2000), 5000);
+    }
+
+    #[test]
+    fn test_pixel_pitch_um_for_drc() {
+        let pdk = PdkConfig::builtin("sky130").unwrap();
+        let pitch = pdk.pixel_pitch_um_for_drc(&pdk.drc);
+        let expected =
+            pdk.snap_to_grid(pdk.drc.min_width) + pdk.snap_to_grid(pdk.drc.effective_spacing());
+        assert!((pitch - expected).abs() < 1e-9);
+        // For sky130 met5: min_width=1.6, min_spacing=1.6, no wide metal
+        // snap_to_grid(1.6) = 1.6 (already on 0.005 grid)
+        // So pitch should be 3.2
+        assert!((pitch - 3.2).abs() < 1e-9);
+    }
 }

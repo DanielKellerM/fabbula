@@ -779,4 +779,136 @@ mod tests {
         let (x, y) = t.apply(&GdsPoint::new(100, 50));
         assert_eq!((x, y), (100, -50));
     }
+
+    #[test]
+    fn test_write_gds_roundtrip() {
+        let cell_name = "roundtrip_cell";
+        let rects = vec![
+            Rect::new(0, 0, 100, 100),
+            Rect::new(200, 200, 400, 400),
+            Rect::new(500, 0, 600, 50),
+        ];
+        let layers = vec![LayerRects {
+            rects: &rects,
+            layer: 72,
+            datatype: 20,
+        }];
+
+        let tmp = NamedTempFile::with_suffix(".gds").unwrap();
+        write_gds_multi(&layers, cell_name, tmp.path()).unwrap();
+
+        // Read it back and verify
+        let lib = GdsLibrary::load(tmp.path()).unwrap();
+        assert_eq!(
+            lib.structs.len(),
+            1,
+            "Expected exactly 1 cell in the library"
+        );
+        assert_eq!(
+            lib.structs[0].name, cell_name,
+            "Cell name should match what was written"
+        );
+
+        let boundary_count = lib.structs[0]
+            .elems
+            .iter()
+            .filter(|e| matches!(e, GdsElement::GdsBoundary(_)))
+            .count();
+        assert_eq!(
+            boundary_count,
+            rects.len(),
+            "Boundary count should match the number of rects written"
+        );
+    }
+
+    #[test]
+    fn test_merge_into_gds_roundtrip() {
+        let pdk = test_pdk();
+        let layer = pdk.artwork_layer.gds_layer;
+        let dt = pdk.artwork_layer.gds_datatype;
+
+        // Create a base GDS with one cell containing one boundary
+        let mut base_cell = GdsStruct::new("merge_target");
+        base_cell
+            .elems
+            .push(make_rect_boundary(layer, dt, 0, 0, 100, 100));
+        let original_count = base_cell.elems.len();
+
+        let mut base_lib = GdsLibrary::new("base");
+        base_lib.structs.push(base_cell);
+        let base_file = save_lib(&base_lib);
+
+        // Merge additional rects into it
+        let new_rects = vec![Rect::new(200, 200, 300, 300), Rect::new(400, 400, 500, 500)];
+        let layers = vec![LayerRects {
+            rects: &new_rects,
+            layer,
+            datatype: dt,
+        }];
+
+        let out_file = NamedTempFile::with_suffix(".gds").unwrap();
+        merge_into_gds_multi(
+            &layers,
+            base_file.path(),
+            out_file.path(),
+            Some("merge_target"),
+            0,
+            0,
+        )
+        .unwrap();
+
+        // Load the merged output and verify
+        let merged_lib = GdsLibrary::load(out_file.path()).unwrap();
+        let cell = merged_lib
+            .structs
+            .iter()
+            .find(|s| s.name == "merge_target")
+            .expect("merge_target cell should exist in merged output");
+
+        let boundary_count = cell
+            .elems
+            .iter()
+            .filter(|e| matches!(e, GdsElement::GdsBoundary(_)))
+            .count();
+        assert_eq!(
+            boundary_count,
+            original_count + new_rects.len(),
+            "Merged file should have original + new boundaries"
+        );
+    }
+
+    #[test]
+    fn test_write_gds_single_layer() {
+        let pdk = test_pdk();
+        let rects = vec![Rect::new(0, 0, 1000, 1000), Rect::new(2000, 0, 3000, 500)];
+
+        let tmp = NamedTempFile::with_suffix(".gds").unwrap();
+        write_gds(&rects, &pdk, "single_layer_cell", tmp.path()).unwrap();
+
+        // Verify the file exists and can be loaded
+        assert!(
+            tmp.path().exists(),
+            "Output GDS file should exist at {}",
+            tmp.path().display()
+        );
+
+        let lib = GdsLibrary::load(tmp.path()).unwrap();
+        assert_eq!(lib.structs.len(), 1, "Should have exactly 1 cell");
+        assert_eq!(
+            lib.structs[0].name, "single_layer_cell",
+            "Cell name should match"
+        );
+
+        let boundary_count = lib.structs[0]
+            .elems
+            .iter()
+            .filter(|e| matches!(e, GdsElement::GdsBoundary(_)))
+            .count();
+        assert_eq!(
+            boundary_count,
+            rects.len(),
+            "Should have written {} boundaries",
+            rects.len()
+        );
+    }
 }
