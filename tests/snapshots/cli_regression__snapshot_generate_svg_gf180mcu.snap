@@ -4,7 +4,7 @@ expression: svg_content
 ---
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
-     width="76" height="76"
+     width="1064" height="1064"
      viewBox="-147 -147 7654 7654">
   <rect x="-147" y="-147" width="7654" height="7654" fill="#1a1a2e"/>
   <g transform="translate(0, 7360) scale(1, -1)">

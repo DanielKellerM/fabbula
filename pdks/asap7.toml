@@ -9,6 +9,12 @@
 #   GDS layer map: OpenROAD-flow-scripts/flow/platforms/asap7/KLayout/asap7.lyt
 #   DRC rules: asap7_tech_1x_201209.lef (M9 WIDTH 0.04, PITCH 0.08)
 
+# WARNING: ASAP7 uses 4x lithographic scaling in standard design flows.
+# Dimensions in this file are at 1x (real) scale. If your design is at 4x scale
+# (the default in most ASAP7 flows), you must either:
+#   (a) divide your target artwork size by 4, or
+#   (b) use a custom TOML with 4x-scaled dimensions (multiply all DRC values by 4)
+
 [pdk]
 name = "asap7"
 description = "ASAP7 - ASU/ARM 7nm FinFET virtual PDK"

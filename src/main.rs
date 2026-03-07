@@ -15,7 +15,7 @@ use fabbula::gdsio::{LayerRects, merge_into_gds_multi, read_existing_metal, writ
 use fabbula::generation::generate_layer_polygons;
 use fabbula::lef::{LefLayer, write_lef_multi};
 use fabbula::pdk::{ArtworkLayerProfile, DrcRules, PdkConfig};
-use fabbula::polygon::{PixelPlacement, PolygonStrategy, Rect, bounding_box};
+use fabbula::polygon::{PixelPlacement, PolygonStrategy, Rect, bounding_box, bounding_box_refs};
 use fabbula::preview::{
     DEFAULT_LAYER_COLORS, HtmlLayer, SvgLayer, write_deep_zoom_preview, write_html_preview_multi,
     write_svg_multi,
@@ -75,6 +75,10 @@ enum Commands {
         /// Cell name in the output GDS
         #[arg(long, default_value = "artwork")]
         cell_name: String,
+
+        /// GDS library name (default: "fabbula")
+        #[arg(long, default_value = "fabbula")]
+        library_name: String,
 
         /// Threshold for converting image to binary (0-255, "otsu", or "auto" for otsu + auto-polarity)
         #[arg(long, default_value = "128")]
@@ -247,6 +251,10 @@ enum Commands {
         /// Continue despite density enforcement failures
         #[arg(long)]
         force: bool,
+
+        /// Skip DRC check on output (DRC is on by default)
+        #[arg(long)]
+        no_check_drc: bool,
 
         /// Color extraction mode for multi-layer output
         #[arg(long, default_value = "single", value_enum)]
@@ -473,6 +481,7 @@ fn main() -> Result<()> {
             output,
             pdk,
             cell_name,
+            library_name,
             threshold,
             strategy,
             separated,
@@ -648,7 +657,13 @@ fn main() -> Result<()> {
                         datatype: profile.gds_datatype,
                     })
                     .collect();
-                write_gds_multi(&gds_layers, &cell_name, &output)?;
+                write_gds_multi(
+                    &gds_layers,
+                    &cell_name,
+                    &output,
+                    &library_name,
+                    pdk.pdk.db_units_per_um,
+                )?;
             } else {
                 let total_rects: usize = layer_results.iter().map(|(r, _)| r.len()).sum();
                 tracing::info!(
@@ -680,7 +695,19 @@ fn main() -> Result<()> {
                         color: DEFAULT_LAYER_COLORS[i % DEFAULT_LAYER_COLORS.len()],
                     })
                     .collect();
-                write_svg_multi(&svg_layers, &svg_path, 0.01, Some("#1a1a2e"))?;
+                let svg_scale = {
+                    let all_svg_rects: Vec<&Rect> =
+                        layer_results.iter().flat_map(|(r, _)| r.iter()).collect();
+                    let svg_bb =
+                        bounding_box_refs(&all_svg_rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
+                    let max_dim = svg_bb.width().max(svg_bb.height()).0 as f64;
+                    if max_dim > 0.0 {
+                        1024.0 / max_dim
+                    } else {
+                        0.01
+                    }
+                };
+                write_svg_multi(&svg_layers, &svg_path, svg_scale, Some("#1a1a2e"))?;
             }
 
             // HTML
@@ -769,6 +796,7 @@ fn main() -> Result<()> {
             dither,
             no_density_enforce,
             force,
+            no_check_drc,
             color_mode,
             num_colors,
         } => {
@@ -932,9 +960,38 @@ fn main() -> Result<()> {
             // Report artwork bounds
             report_bounds(&layer_results, &pdk);
 
+            // DRC check per layer
+            if !no_check_drc {
+                for (rects, profile) in &layer_results {
+                    tracing::info!("DRC check for layer '{}':", profile.name);
+                    let violations = check_drc(rects, pdk.pdk.db_units_per_um, &profile.drc);
+                    report_drc(&violations);
+                }
+            }
+
             let ox = pdk.um_to_dbu(offset_x);
             let oy = pdk.um_to_dbu(offset_y);
 
+            // Validate offset alignment to manufacturing grid
+            if let Some(grid_um) = Some(pdk.grid.manufacturing_grid_um).filter(|g| *g > 0.0) {
+                let grid_dbu = pdk.um_to_dbu(grid_um);
+                if grid_dbu.0 > 0 {
+                    if ox.0 % grid_dbu.0 != 0 {
+                        tracing::warn!(
+                            "offset-x ({:.3} um) is not aligned to manufacturing grid ({:.3} um)",
+                            offset_x,
+                            grid_um
+                        );
+                    }
+                    if oy.0 % grid_dbu.0 != 0 {
+                        tracing::warn!(
+                            "offset-y ({:.3} um) is not aligned to manufacturing grid ({:.3} um)",
+                            offset_y,
+                            grid_um
+                        );
+                    }
+                }
+            }
             let gds_layers: Vec<LayerRects> = layer_results
                 .iter()
                 .map(|(rects, profile)| LayerRects {
@@ -976,10 +1033,16 @@ fn main() -> Result<()> {
                     println!("  {:<15} (failed to load)", name);
                     continue;
                 };
+                let tag = if name == "fabbula2" || name == "freepdk45" || name == "asap7" {
+                    " (virtual)"
+                } else {
+                    ""
+                };
                 println!(
-                    "  {:<15} {}  (artwork layer: {}/{})",
+                    "  {:<15} {}{} (artwork layer: {}/{})",
                     name,
                     pdk.pdk.description,
+                    tag,
                     pdk.artwork_layer.gds_layer,
                     pdk.artwork_layer.gds_datatype
                 );

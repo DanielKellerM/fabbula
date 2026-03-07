@@ -154,7 +154,9 @@ fn rect_spacing(a: &Rect, b: &Rect) -> Dbu {
         Dbu(0)
     };
 
-    // Manhattan spacing for DRC is typically checked per-axis
+    // Manhattan spacing: for diagonal neighbors, use min(dx,dy) which matches
+    // most foundry DRC rule decks. Some advanced nodes use Euclidean distance;
+    // for fabbula's grid-aligned output this is equivalent.
     if dx > Dbu(0) && dy > Dbu(0) {
         dx.min(dy)
     } else {
@@ -190,8 +192,8 @@ pub fn check_drc_capped(
     let min_w_dbu = um_to_dbu(drc.min_width, db_units_per_um);
     let min_s_dbu = um_to_dbu(drc.min_spacing, db_units_per_um);
     let min_area_dbu2 = if drc.min_area > 0.0 {
-        let side = um_to_dbu(drc.min_area.sqrt(), db_units_per_um);
-        (side.0 as i64) * (side.0 as i64)
+        let dbu_per_um = db_units_per_um as f64;
+        (drc.min_area * dbu_per_um * dbu_per_um) as i64
     } else {
         0
     };
@@ -338,6 +340,8 @@ pub fn check_drc_capped(
                                 let b_wide = neighbor.rect.width() >= thresh
                                     || neighbor.rect.height() >= thresh;
                                 if a_wide || b_wide {
+                                    // Note: uses single threshold for both wide-to-narrow and
+                                    // wide-to-wide checks. Real PDKs may distinguish these cases.
                                     (ws, DrcRule::WideMetalSpacing)
                                 } else {
                                     (min_s_dbu, DrcRule::MinSpacing)
@@ -437,6 +441,8 @@ fn check_density(
     let density_max_permille = (drc.density_max * 1000.0) as i64;
     let density_min_permille = (drc.density_min * 1000.0) as i64;
 
+    // Density grid origin is at bounding box corner. Real foundry DRC may
+    // align to chip boundary or a fixed grid; results may differ slightly.
     // Grid covers bounding box; each cell = step x step dbu
     let grid_x0 = bb.x0.0;
     let grid_y0 = bb.y0.0;

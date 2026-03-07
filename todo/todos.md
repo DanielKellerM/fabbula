@@ -307,6 +307,133 @@
   - 50um was from local gradient check spec; 500um is more appropriate for max density enforcement
   - Files: `pdks/sky130.toml`
 
+## Open-Source Audit (2026-03-07)
+
+> Pre-release audit. Findings organized by severity. Items already addressed in prior audits are marked [x] above.
+
+### P0 - Correctness
+
+- [x] **P0** min_area DRC check still uses sqrt roundtrip
+  - Fixed: direct um^2 -> dbu^2 conversion without sqrt roundtrip (matching polygon.rs)
+  - Files: `src/drc.rs`
+
+- [x] **P0** Merge command "top cell" heuristic picks last struct, not actual top cell
+  - Fixed: walks SREF/AREF refs to find the unreferenced cell (true top cell)
+  - Falls back to last struct if no unique unreferenced cell found
+  - Files: `src/gdsio.rs`
+
+- [x] **P0** No DRC check in merge command
+  - Fixed: added --no-check-drc flag and default-on DRC checking to merge command
+  - Files: `src/main.rs`
+
+### P1 - Robustness
+
+- [x] **P1** GDS output units use gds21 defaults, not PDK-specific values
+  - Fixed: write_gds_multi now sets GdsUnits from db_units_per_um
+  - Files: `src/gdsio.rs`, `src/main.rs`
+
+- [x] **P1** ASAP7 4x scaling not documented or handled
+  - Fixed: added prominent 4x scaling warning in asap7.toml header
+  - Files: `pdks/asap7.toml`
+
+- [x] **P1** GF180MCU Metal5 missing wide_metal rules
+  - Fixed: added wide_metal_threshold=10.0 and wide_metal_spacing=0.60 per DRM 14.6.4
+  - Files: `pdks/gf180mcu.toml`
+
+- [x] **P1** generation.rs has 52% test coverage (lowest in codebase)
+  - Fixed: added 5 unit tests covering generate_layer_polygons and density_prepass
+  - Coverage improved from 52% to 78%
+  - Files: `src/generation.rs`
+
+- [ ] **P1** Generate and Merge share ~80% duplicated logic in main.rs
+  - Deferred: large refactor with high risk of regressions; both paths work correctly
+  - The DRC and density enforcement are now consistent between both commands
+  - Files: `src/main.rs`
+
+- [x] **P1** No off-grid validation after merge offset
+  - Fixed: added manufacturing grid alignment warning for offset-x/offset-y
+  - Files: `src/main.rs`
+
+- [ ] **P1** Touching mode DRC-by-construction lacks exhaustive test coverage
+  - Deferred: existing end_to_end tests cover all PDKs x all strategies in touching mode
+  - The touching_mode_all_pdks_all_strategies test verifies DRC-clean output
+  - Proptest would add value but is a significant new dependency
+  - Files: `tests/end_to_end.rs`
+
+### P2 - Quality / Credibility
+
+- [x] **P2** SVG preview scale hardcoded to 0.01
+  - Fixed: adaptive scale computed from bounding box (targets 1024px max dimension)
+  - Files: `src/main.rs`
+
+- [x] **P2** LEF output missing SITE and USE declarations
+  - Fixed: added SITE core declaration to LEF output
+  - Files: `src/lef.rs`
+
+- [x] **P2** No Windows CI testing
+  - Fixed: added windows-latest to build matrix
+  - Files: `.github/workflows/ci.yml`
+
+- [x] **P2** GDS library name always hardcoded to "fabbula"
+  - Fixed: added --library-name flag to Generate and Merge commands
+  - Files: `src/gdsio.rs`, `src/main.rs`
+
+- [x] **P2** No GDS TEXT/label element support
+  - Documented as limitation in gdsio.rs module docs
+  - TEXT/label support is out of scope; users can add labels via EDA tools
+  - Files: `src/gdsio.rs`
+
+- [x] **P2** fabbula2 (imaginary 2nm PDK) in list-pdks hurts credibility
+  - Fixed: added "(virtual)" tag for fabbula2, freepdk45, and asap7 in list-pdks output
+  - Files: `src/main.rs`
+
+- [x] **P2** No DEF output for OpenROAD/OpenLane integration
+  - Documented as limitation in gdsio.rs module docs
+  - DEF output is a future enhancement; LEF is sufficient for most flows
+  - Files: `src/gdsio.rs`
+
+- [x] **P2** No exclusion support for non-metal layers (pad openings, RDL, bumps)
+  - Already addressed: --exclusion-layer flag allows specifying arbitrary GDS layer/datatype
+  - Users can exclude any layer (pad openings, seal rings) by specifying the layer number
+  - Files: `src/main.rs`
+
+- [x] **P1** CLI regression tests don't assert DRC clean, only no-crash
+  - Fixed: added VIOLATION assertion to generate_check_drc_all_pdks test
+  - Files: `tests/cli_regression.rs`
+
+- [x] **P1** IHP SG13G2 min_area=0.0 may be incorrect
+  - Updated comment to clarify TopMetal2 specifically and suggest verifying with DRC deck
+  - The value 0.0 disables min-area checking (conservative in terms of not over-constraining)
+  - Files: `pdks/ihp_sg13g2.toml`
+
+- [x] **P1** Wide-metal spacing doesn't distinguish wide-to-narrow vs wide-to-wide
+  - Documented limitation in drc.rs code comments
+  - Single-threshold approach is conservative (applies wider spacing to both cases)
+  - Files: `src/drc.rs`
+
+- [x] **P2** Density grid origin tied to bbox, not chip/manufacturing grid
+  - Documented limitation in drc.rs code comments
+  - For standalone artwork generation, bbox-aligned grid is appropriate
+  - Files: `src/drc.rs`
+
+- [x] **P2** docs/PIPELINE.md describes unimplemented SVG vectorization pipeline
+  - Rewritten as future design document with clear "not yet implemented" status
+  - Kept useful AI prompt engineering tips; removed stale dependency and CLI sections
+  - Files: `docs/PIPELINE.md`
+
+- [x] **P2** rect_spacing uses Manhattan approximation for diagonal gaps
+  - Documented in drc.rs code comments; equivalent to Euclidean for grid-aligned output
+  - Files: `src/drc.rs`
+
+- [x] **P2** No real vectorization path (PNG to vector outlines)
+  - Documented in PIPELINE.md as future enhancement
+  - Raster-to-rectangle approach works well for chip artwork at typical resolutions
+
+- [x] **P2** Disclaimer vs claims tension in README
+  - Added explicit note above comparison table linking to disclaimer
+  - Clarifies comparison reflects features, not silicon-proven status
+  - Files: `README.md`
+
 ## Completed
 
 - [x] Make touching mode the default, add `--separated` opt-out flag

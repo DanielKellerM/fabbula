@@ -41,6 +41,7 @@ pub fn write_lef_multi(
     writeln!(f)?;
     writeln!(f, "MACRO {cell_name}")?;
     writeln!(f, "  CLASS BLOCK ;")?;
+    writeln!(f, "  SITE core ;")?;
     writeln!(f, "  ORIGIN 0 0 ;")?;
     writeln!(f, "  SIZE {width_um:.3} BY {height_um:.3} ;")?;
     writeln!(f, "  SYMMETRY X Y ;")?;

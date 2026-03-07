@@ -8,6 +8,7 @@ DIVIDERCHAR "/" ;
 
 MACRO artwork
   CLASS BLOCK ;
+  SITE core ;
   ORIGIN 0 0 ;
   SIZE 12.800 BY 12.800 ;
   SYMMETRY X Y ;

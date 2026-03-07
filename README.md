@@ -222,6 +222,8 @@ There are also several other converters ([gdsGEN](https://github.com/raghu1153/g
 
 All existing tools are Python or C, most require external dependencies (Magic VLSI, KLayout, ImageMagick, Docker), and none except ArtistIC address DRC compliance automatically. fabbula's contribution is bringing this to Rust: a single `cargo install`, no runtime dependencies, with DRC-clean output by construction via grid-snapped polygon sizing.
 
+**Note:** Unlike ArtistIC, fabbula has not yet been used on a production tapeout. See the [Disclaimer](#disclaimer) section. The comparison below reflects feature availability, not silicon-proven status.
+
 | | **fabbula** | ArtistIC | logo-to-gds2 | png2gds | chip_art |
 |---|---|---|---|---|---|
 | Language | Rust | Python | Python | C | Python |

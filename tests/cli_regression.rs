@@ -317,7 +317,8 @@ fn generate_check_drc_all_pdks() {
                 "128",
             ])
             .assert()
-            .success();
+            .success()
+            .stderr(predicates::str::contains("VIOLATION").not());
     }
 }
 

@@ -6,6 +6,11 @@
 //!
 //! Provides functions to write artwork polygons to new GDS files, merge them
 //! into existing layouts, and read back existing metal for exclusion masking.
+//!
+//! Limitations:
+//! - Only GdsBoundary (polygon) elements are generated; GDS TEXT/label elements
+//!   are not supported. Add labels manually or via your EDA tool after generation.
+//! - DEF output is not supported; use LEF for OpenLane/OpenROAD integration.
 
 use crate::pdk::PdkConfig;
 use crate::polygon::Rect;
@@ -104,8 +109,22 @@ pub struct LayerRects<'a> {
 }
 
 /// Write multiple layers of polygons to a new GDSII file.
-pub fn write_gds_multi(layers: &[LayerRects], cell_name: &str, output: &Path) -> Result<()> {
-    let mut lib = GdsLibrary::new("fabbula");
+///
+/// `db_units_per_um` sets the GDS units header so downstream tools interpret
+/// coordinates correctly (e.g. 1000 for 1nm resolution).
+pub fn write_gds_multi(
+    layers: &[LayerRects],
+    cell_name: &str,
+    output: &Path,
+    library_name: &str,
+    db_units_per_um: u32,
+) -> Result<()> {
+    let mut lib = GdsLibrary::new(library_name);
+    // Set GDS units: (user_unit, db_unit_in_meters)
+    // user_unit = 1 DB unit in um = 1/db_units_per_um
+    // db_unit_in_meters = user_unit * 1e-6
+    let user_unit = 1.0 / db_units_per_um as f64;
+    lib.units = gds21::GdsUnits::new(user_unit, user_unit * 1e-6);
     let mut cell = GdsStruct::new(cell_name);
 
     let total: usize = layers.iter().map(|lr| lr.rects.len()).sum();
@@ -143,6 +162,8 @@ pub fn write_gds(rects: &[Rect], pdk: &PdkConfig, cell_name: &str, output: &Path
         }],
         cell_name,
         output,
+        "fabbula",
+        pdk.pdk.db_units_per_um,
     )
 }
 
@@ -170,9 +191,36 @@ pub fn merge_into_gds_multi(
                 )
             })?
     } else {
-        lib.structs
-            .last_mut()
-            .ok_or_else(|| anyhow::anyhow!("No cells in input GDS"))?
+        // Find the true top cell: the struct not referenced by any SREF/AREF
+        let mut referenced: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for s in lib.structs.iter() {
+            for elem in &s.elems {
+                match elem {
+                    gds21::GdsElement::GdsStructRef(sref) => {
+                        referenced.insert(&sref.name);
+                    }
+                    gds21::GdsElement::GdsArrayRef(aref) => {
+                        referenced.insert(&aref.name);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if lib.structs.is_empty() {
+            anyhow::bail!("No cells in input GDS");
+        }
+        // Find the last unreferenced struct (top cell)
+        let top_idx = lib
+            .structs
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, s)| !referenced.contains(s.name.as_str()))
+            .map(|(i, _)| i);
+        let idx = top_idx.unwrap_or(lib.structs.len() - 1);
+        let cell_name = lib.structs[idx].name.clone();
+        tracing::info!("Auto-detected top cell: '{}'", cell_name);
+        &mut lib.structs[idx]
     };
 
     let total: usize = layers.iter().map(|lr| lr.rects.len()).sum();
@@ -878,7 +926,7 @@ mod tests {
         }];
 
         let tmp = NamedTempFile::with_suffix(".gds").unwrap();
-        write_gds_multi(&layers, cell_name, tmp.path()).unwrap();
+        write_gds_multi(&layers, cell_name, tmp.path(), "fabbula", 1000).unwrap();
 
         // Read it back and verify
         let lib = GdsLibrary::load(tmp.path()).unwrap();
