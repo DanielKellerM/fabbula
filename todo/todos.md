@@ -198,6 +198,13 @@
   - Added tests/end_to_end.rs with 5 tests: real image pipeline, all-PDKs separated mode,
     empty bitmap, single pixel, all strategies DRC-clean
 
+- [x] **P1** CLI regression testing with snapshot testing
+  - tests/cli_regression.rs: 34 tests using insta snapshots and structural assertions
+  - Deterministic 16x16 checkerboard test image (no binaries in repo)
+  - Snapshots for: list-pdks, show-pdk (x6), SVG (x6), LEF (x6), GDS stats (x6)
+  - Strategy comparison, DRC check, separated mode, invert, dither, otsu, error cases
+  - CI: added MSRV (1.93) job and cargo-machete unused dependency check
+
 ### P2 - Improvements
 
 - [ ] **P2** No rotation/flip support

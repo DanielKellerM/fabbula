@@ -1,0 +1,30 @@
+---
+source: tests/cli_regression.rs
+expression: stdout
+---
+PDK: asap7 (ASAP7 - ASU/ARM 7nm FinFET virtual PDK)
+Node: 7 nm
+DB units/µm: 1000
+
+Artwork layer: M9 (GDS 90/0)
+
+DRC rules:
+  Min width:   0.04 µm
+  Min spacing: 0.04 µm
+  Min area:    0.008 µm²
+  Max width:   2 µm (slotting)
+  Max density: 80%
+
+Grid: 0.001 µm
+Pixel pitch: 0.080 µm (DRC-safe pixel size)
+
+Metal stack:
+  M1 (GDS 19/0)
+  M2 (GDS 20/0)
+  M3 (GDS 30/0)
+  M4 (GDS 40/0)
+  M5 (GDS 50/0)
+  M6 (GDS 60/0)
+  M7 (GDS 70/0)
+  M8 (GDS 80/0)
+  M9 (GDS 90/0)

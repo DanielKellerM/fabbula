@@ -1,0 +1,13 @@
+---
+source: tests/cli_regression.rs
+expression: stdout
+---
+Built-in PDK configurations:
+  sky130          SkyWater SKY130 130nm CMOS  (artwork layer: 72/20)
+  ihp_sg13g2      IHP SG13G2 130nm BiCMOS  (artwork layer: 134/0)
+  gf180mcu        GlobalFoundries GF180MCU 180nm CMOS (variant D, 5-metal)  (artwork layer: 81/0)
+  freepdk45       FreePDK45 - NCSU 45nm virtual PDK  (artwork layer: 29/0)
+  asap7           ASAP7 - ASU/ARM 7nm FinFET virtual PDK  (artwork layer: 90/0)
+  fabbula2        fabbula2 - imaginary 2nm nanosheet PDK (inspired by TSMC N2)  (artwork layer: 150/0)
+
+You can also provide a custom .toml file with -p path/to/pdk.toml

@@ -46,6 +46,28 @@ jobs:
           --fail-under-lines 70
           --summary-only
 
+  msrv:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+      - name: Build with MSRV
+        run: cargo build
+      - name: Test with MSRV
+        run: cargo test
+
+  machete:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-machete
+      - run: cargo machete
+
   audit:
     needs: lint
     runs-on: ubuntu-latest

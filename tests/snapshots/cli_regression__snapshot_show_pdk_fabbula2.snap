@@ -1,0 +1,37 @@
+---
+source: tests/cli_regression.rs
+expression: stdout
+---
+PDK: fabbula2 (fabbula2 - imaginary 2nm nanosheet PDK (inspired by TSMC N2))
+Node: 2 nm
+DB units/µm: 1000
+
+Artwork layer: AP (GDS 150/0)
+
+DRC rules:
+  Min width:   0.8 µm
+  Min spacing: 0.8 µm
+  Min area:    1 µm²
+  Max width:   25 µm (slotting)
+  Max density: 100%
+
+Grid: 0.001 µm
+Pixel pitch: 1.600 µm (DRC-safe pixel size)
+
+Metal stack:
+  M1 (GDS 10/0)
+  M2 (GDS 20/0)
+  M3 (GDS 30/0)
+  M4 (GDS 40/0)
+  M5 (GDS 50/0)
+  M6 (GDS 60/0)
+  M7 (GDS 70/0)
+  M8 (GDS 80/0)
+  M9 (GDS 90/0)
+  M10 (GDS 100/0)
+  M11 (GDS 110/0)
+  M12 (GDS 120/0)
+  M13 (GDS 125/0)
+  M14 (GDS 130/0)
+  M15 (GDS 140/0)
+  AP (GDS 150/0)

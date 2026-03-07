@@ -1,0 +1,20 @@
+---
+source: tests/cli_regression.rs
+expression: svg_content
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="133" height="133"
+     viewBox="-256 -256 13312 13312">
+  <rect x="-256" y="-256" width="13312" height="13312" fill="#1a1a2e"/>
+  <g transform="translate(0, 12800) scale(1, -1)">
+    <rect x="3200" y="9600" width="3200" height="3200" fill="#c0c0c0"/>
+    <rect x="9600" y="9600" width="3200" height="3200" fill="#c0c0c0"/>
+    <rect x="0" y="6400" width="3200" height="3200" fill="#c0c0c0"/>
+    <rect x="6400" y="6400" width="3200" height="3200" fill="#c0c0c0"/>
+    <rect x="3200" y="3200" width="3200" height="3200" fill="#c0c0c0"/>
+    <rect x="9600" y="3200" width="3200" height="3200" fill="#c0c0c0"/>
+    <rect x="0" y="0" width="3200" height="3200" fill="#c0c0c0"/>
+    <rect x="6400" y="0" width="3200" height="3200" fill="#c0c0c0"/>
+  </g>
+</svg>

@@ -1,0 +1,24 @@
+---
+source: tests/cli_regression.rs
+expression: "lines.join(\"\\n\")"
+---
+--- strategy: pixel-rects ---
+cell: artwork
+  polygons: 0
+  layers: []
+  bbox: empty
+--- strategy: row-merge ---
+cell: artwork
+  polygons: 32
+  layers: [72/20]
+  bbox: (0, 0) to (25600, 25600)
+--- strategy: greedy-merge ---
+cell: artwork
+  polygons: 8
+  layers: [72/20]
+  bbox: (0, 0) to (25600, 25600)
+--- strategy: histogram-merge ---
+cell: artwork
+  polygons: 8
+  layers: [72/20]
+  bbox: (0, 0) to (25600, 25600)

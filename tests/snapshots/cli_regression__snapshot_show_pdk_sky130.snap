@@ -1,0 +1,26 @@
+---
+source: tests/cli_regression.rs
+expression: stdout
+---
+PDK: sky130 (SkyWater SKY130 130nm CMOS)
+Node: 130 nm
+DB units/µm: 1000
+
+Artwork layer: met5 (GDS 72/20)
+
+DRC rules:
+  Min width:   1.6 µm
+  Min spacing: 1.6 µm
+  Min area:    4 µm²
+  Max density: 100%
+
+Grid: 0.005 µm
+Pixel pitch: 3.200 µm (DRC-safe pixel size)
+
+Metal stack:
+  li1 (GDS 67/20)
+  met1 (GDS 68/20)
+  met2 (GDS 69/20)
+  met3 (GDS 70/20)
+  met4 (GDS 71/20)
+  met5 (GDS 72/20)

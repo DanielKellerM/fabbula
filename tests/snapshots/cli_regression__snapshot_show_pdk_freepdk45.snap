@@ -1,0 +1,30 @@
+---
+source: tests/cli_regression.rs
+expression: stdout
+---
+PDK: freepdk45 (FreePDK45 - NCSU 45nm virtual PDK)
+Node: 45 nm
+DB units/µm: 1000
+
+Artwork layer: Metal10 (GDS 29/0)
+
+DRC rules:
+  Min width:   0.8 µm
+  Min spacing: 0.8 µm
+  Min area:    0 µm²
+  Max density: 80%
+
+Grid: 0.005 µm
+Pixel pitch: 1.700 µm (DRC-safe pixel size)
+
+Metal stack:
+  Metal1 (GDS 11/0)
+  Metal2 (GDS 13/0)
+  Metal3 (GDS 15/0)
+  Metal4 (GDS 17/0)
+  Metal5 (GDS 19/0)
+  Metal6 (GDS 21/0)
+  Metal7 (GDS 23/0)
+  Metal8 (GDS 25/0)
+  Metal9 (GDS 27/0)
+  Metal10 (GDS 29/0)

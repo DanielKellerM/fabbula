@@ -1,0 +1,8 @@
+---
+source: tests/cli_regression.rs
+expression: stats
+---
+cell: top_cell
+  polygons: 9
+  layers: [1/0, 72/20]
+  bbox: (0, 0) to (100000, 100000)

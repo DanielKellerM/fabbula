@@ -1,0 +1,27 @@
+---
+source: tests/cli_regression.rs
+expression: lef_content
+---
+VERSION 5.8 ;
+BUSBITCHARS "[]" ;
+DIVIDERCHAR "/" ;
+
+MACRO artwork
+  CLASS BLOCK ;
+  ORIGIN 0 0 ;
+  SIZE 25.600 BY 25.600 ;
+  SYMMETRY X Y ;
+  OBS
+    LAYER met5 ;
+      RECT 6.400 19.200 12.800 25.600 ;
+      RECT 19.200 19.200 25.600 25.600 ;
+      RECT 0.000 12.800 6.400 19.200 ;
+      RECT 12.800 12.800 19.200 19.200 ;
+      RECT 6.400 6.400 12.800 12.800 ;
+      RECT 19.200 6.400 25.600 12.800 ;
+      RECT 0.000 0.000 6.400 6.400 ;
+      RECT 12.800 0.000 19.200 6.400 ;
+  END
+END artwork
+
+END LIBRARY

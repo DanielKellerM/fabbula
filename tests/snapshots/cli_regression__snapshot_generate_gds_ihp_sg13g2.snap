@@ -1,0 +1,8 @@
+---
+source: tests/cli_regression.rs
+expression: stats
+---
+cell: artwork
+  polygons: 8
+  layers: [134/0]
+  bbox: (0, 0) to (28800, 28800)

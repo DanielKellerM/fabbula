@@ -1,0 +1,27 @@
+---
+source: tests/cli_regression.rs
+expression: stdout
+---
+PDK: ihp_sg13g2 (IHP SG13G2 130nm BiCMOS)
+Node: 130 nm
+DB units/µm: 1000
+
+Artwork layer: TopMetal2 (GDS 134/0)
+
+DRC rules:
+  Min width:   1.8 µm
+  Min spacing: 1.8 µm
+  Min area:    0 µm²
+  Max density: 80%
+
+Grid: 0.005 µm
+Pixel pitch: 3.600 µm (DRC-safe pixel size)
+
+Metal stack:
+  Metal1 (GDS 8/0)
+  Metal2 (GDS 10/0)
+  Metal3 (GDS 30/0)
+  Metal4 (GDS 50/0)
+  Metal5 (GDS 67/0)
+  TopMetal1 (GDS 125/0)
+  TopMetal2 (GDS 134/0)

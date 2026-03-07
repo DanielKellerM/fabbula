@@ -1,0 +1,26 @@
+---
+source: tests/cli_regression.rs
+expression: stdout
+---
+PDK: gf180mcu (GlobalFoundries GF180MCU 180nm CMOS (variant D, 5-metal))
+Node: 180 nm
+DB units/µm: 1000
+
+Artwork layer: Metal5 (GDS 81/0)
+
+DRC rules:
+  Min width:   0.44 µm
+  Min spacing: 0.46 µm
+  Min area:    0 µm²
+  Max width:   30 µm (slotting)
+  Max density: 80%
+
+Grid: 0.005 µm
+Pixel pitch: 0.900 µm (DRC-safe pixel size)
+
+Metal stack:
+  Metal1 (GDS 34/0)
+  Metal2 (GDS 36/0)
+  Metal3 (GDS 42/0)
+  Metal4 (GDS 46/0)
+  Metal5 (GDS 81/0)
