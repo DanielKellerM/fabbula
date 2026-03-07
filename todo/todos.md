@@ -304,6 +304,30 @@
   - Fix: change to "Styles that work well" or "Styles that convert well"
   - Files: `README.md`
 
+- [ ] **P2** README roadmap marks density-aware generation as incomplete but it's implemented
+  - `README.md:256`: roadmap shows `[ ] Density-aware artwork generation`
+  - But `enforce_density()` in `artwork.rs` and the density feedback loop in `main.rs:412-477` are fully implemented and active
+  - Fix: check the box `[x]` or reword to distinguish done vs planned enhancement
+  - Files: `README.md`
+
+- [ ] **P2** CLI help text lists only 3 of 6 built-in PDKs
+  - `src/main.rs:35`: `long_about` says "Supports multiple open PDKs (SKY130, IHP SG13G2, GF180MCU)"
+  - Missing FreePDK45, ASAP7, fabbula2 (added after initial release)
+  - Fix: update to "6 built-in PDKs" or list all 6
+  - Files: `src/main.rs`
+
+- [ ] **P2** No dry-run/validate subcommand
+  - Can't preview DRC results, polygon count, or check settings without writing GDS
+  - Useful for iterating on threshold/strategy/size before committing to expensive operations
+  - Fix: add `--dry-run` flag that runs full pipeline but skips GDS write, or a `validate` subcommand
+  - Files: `src/main.rs`
+
+- [ ] **P2** README "What makes it fast" section outdated (missing SAT mention)
+  - `README.md:242`: says "R-tree spatial index" for DRC
+  - Density now uses SAT (summed area table) which was a major optimization, but isn't mentioned
+  - Fix: update to mention both R-tree (spacing) and SAT (density)
+  - Files: `README.md`
+
 ## Completed
 
 - [x] Make touching mode the default, add `--separated` opt-out flag
