@@ -30,7 +30,13 @@ impl ArtworkBitmap {
     /// Create a bitmap from a bool slice, packing into u64 words.
     pub fn from_bools(width: u32, height: u32, bools: &[bool]) -> Self {
         let total = (width as usize) * (height as usize);
-        assert_eq!(bools.len(), total);
+        assert_eq!(
+            bools.len(),
+            total,
+            "bools length {} != width*height {}",
+            bools.len(),
+            total
+        );
         let mut pixels = vec![0u64; num_words(total)];
         for (i, &b) in bools.iter().enumerate() {
             if b {

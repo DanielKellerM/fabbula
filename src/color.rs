@@ -139,7 +139,6 @@ pub fn extract_channels(
 pub fn extract_palette(
     path: &Path,
     num_layers: usize,
-    threshold: ThresholdMode,
     max_pixels: Option<(u32, u32)>,
 ) -> Result<Vec<LayerBitmap>> {
     anyhow::ensure!(num_layers >= 1, "num_layers must be >= 1");
@@ -151,8 +150,6 @@ pub fn extract_palette(
         .pixels()
         .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
         .collect();
-
-    let _ = threshold; // Palette mode uses k-means, not threshold
 
     // Quantize into num_layers + 1 clusters: the extra one captures background
     let k = num_layers + 1;

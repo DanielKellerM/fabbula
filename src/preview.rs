@@ -8,7 +8,7 @@
 //! with pan, zoom, and hover-to-inspect functionality.
 
 use crate::pdk::PdkConfig;
-use crate::polygon::Rect;
+use crate::polygon::{Rect, bounding_box_refs};
 use anyhow::{Context, Result};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -31,17 +31,8 @@ pub fn write_svg_multi(
     scale: f64,
     background: Option<&str>,
 ) -> Result<()> {
-    let mut all_rects = layers.iter().flat_map(|l| l.rects.iter());
-    let bb = if let Some(&first) = all_rects.next() {
-        all_rects.fold(first, |bb, r| Rect {
-            x0: bb.x0.min(r.x0),
-            y0: bb.y0.min(r.y0),
-            x1: bb.x1.max(r.x1),
-            y1: bb.y1.max(r.y1),
-        })
-    } else {
-        Rect::new(0, 0, 1000, 1000)
-    };
+    let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
+    let bb = bounding_box_refs(&all_rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
 
     let margin = ((bb.width().max(bb.height())) as f64 * 0.02) as i32;
     let vb_x = bb.x0 - margin;
@@ -138,17 +129,8 @@ pub fn write_html_preview_multi(
     output: &Path,
     pdk: &PdkConfig,
 ) -> Result<()> {
-    let mut all_rects = layers.iter().flat_map(|l| l.rects.iter());
-    let bb = if let Some(&first) = all_rects.next() {
-        all_rects.fold(first, |bb, r| Rect {
-            x0: bb.x0.min(r.x0),
-            y0: bb.y0.min(r.y0),
-            x1: bb.x1.max(r.x1),
-            y1: bb.y1.max(r.y1),
-        })
-    } else {
-        Rect::new(0, 0, 1000, 1000)
-    };
+    let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
+    let bb = bounding_box_refs(&all_rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
     let total_polys: usize = layers.iter().map(|l| l.rects.len()).sum();
     write_html_preview_inner(layers, &bb, total_polys, output, pdk)
 }
@@ -387,17 +369,8 @@ pub fn write_deep_zoom_preview(
     pdk: &PdkConfig,
     tile_dir: &Path,
 ) -> Result<PathBuf> {
-    let mut all_rects = layers.iter().flat_map(|l| l.rects.iter());
-    let bb = if let Some(&first) = all_rects.next() {
-        all_rects.fold(first, |bb, r| Rect {
-            x0: bb.x0.min(r.x0),
-            y0: bb.y0.min(r.y0),
-            x1: bb.x1.max(r.x1),
-            y1: bb.y1.max(r.y1),
-        })
-    } else {
-        Rect::new(0, 0, 1000, 1000)
-    };
+    let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
+    let bb = bounding_box_refs(&all_rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
     let total_polys: usize = layers.iter().map(|l| l.rects.len()).sum();
     let dbu = pdk.pdk.db_units_per_um as f64;
     let width_um = bb.width() as f64 / dbu;

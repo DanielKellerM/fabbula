@@ -754,6 +754,17 @@ pub fn bounding_box(rects: &[Rect]) -> Option<Rect> {
     }))
 }
 
+/// Compute bounding box from a slice of references.
+pub fn bounding_box_refs(rects: &[&Rect]) -> Option<Rect> {
+    let first = **rects.first()?;
+    Some(rects[1..].iter().fold(first, |bb, r| Rect {
+        x0: bb.x0.min(r.x0),
+        y0: bb.y0.min(r.y0),
+        x1: bb.x1.max(r.x1),
+        y1: bb.y1.max(r.y1),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

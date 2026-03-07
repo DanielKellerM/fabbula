@@ -8,7 +8,7 @@
 //! and other digital implementation flows.
 
 use crate::pdk::PdkConfig;
-use crate::polygon::Rect;
+use crate::polygon::{Rect, bounding_box_refs};
 use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::Path;
@@ -26,17 +26,8 @@ pub fn write_lef_multi(
     cell_name: &str,
     output: &Path,
 ) -> Result<()> {
-    let mut all_rects = layers.iter().flat_map(|l| l.rects.iter());
-    let bb = if let Some(&first) = all_rects.next() {
-        all_rects.fold(first, |bb, r| Rect {
-            x0: bb.x0.min(r.x0),
-            y0: bb.y0.min(r.y0),
-            x1: bb.x1.max(r.x1),
-            y1: bb.y1.max(r.y1),
-        })
-    } else {
-        Rect::new(0, 0, 0, 0)
-    };
+    let all_rects: Vec<&Rect> = layers.iter().flat_map(|l| l.rects.iter()).collect();
+    let bb = bounding_box_refs(&all_rects).unwrap_or(Rect::new(0, 0, 0, 0));
     let dbu = pdk.pdk.db_units_per_um as f64;
     let width_um = bb.width() as f64 / dbu;
     let height_um = bb.height() as f64 / dbu;

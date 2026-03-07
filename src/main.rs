@@ -649,7 +649,7 @@ fn main() -> Result<()> {
                     // Use the most conservative pitch so all layers align spatially
                     let shared_drc = most_conservative_drc(&profiles);
                     let n = num_colors.unwrap_or(profiles.len());
-                    let layer_bitmaps = extract_palette(&input, n, thresh, max_px)?;
+                    let layer_bitmaps = extract_palette(&input, n, max_px)?;
                     for LayerBitmap {
                         mut bitmap,
                         layer_index,
@@ -739,10 +739,11 @@ fn main() -> Result<()> {
                         html_path.file_stem().unwrap_or_default().to_string_lossy()
                     ));
                     // Place tile_dir next to html file
-                    let tile_dir = html_path
-                        .parent()
-                        .unwrap_or(Path::new("."))
-                        .join(tile_dir.file_name().unwrap());
+                    let tile_dir = html_path.parent().unwrap_or(Path::new(".")).join(
+                        tile_dir
+                            .file_name()
+                            .expect("tile_dir has a filename component"),
+                    );
                     std::fs::create_dir_all(&tile_dir)?;
 
                     let bb = bounding_box(
@@ -900,7 +901,7 @@ fn main() -> Result<()> {
                 ColorModeArg::Palette => {
                     let shared_drc = most_conservative_drc(&profiles);
                     let n = num_colors.unwrap_or(profiles.len());
-                    let layer_bitmaps = extract_palette(&input, n, thresh, max_px)?;
+                    let layer_bitmaps = extract_palette(&input, n, max_px)?;
                     for LayerBitmap {
                         mut bitmap,
                         layer_index,
@@ -971,7 +972,10 @@ fn main() -> Result<()> {
         Commands::ListPdks => {
             println!("Built-in PDK configurations:");
             for name in PdkConfig::list_builtins() {
-                let pdk = PdkConfig::builtin(name).unwrap();
+                let Ok(pdk) = PdkConfig::builtin(name) else {
+                    println!("  {:<15} (failed to load)", name);
+                    continue;
+                };
                 println!(
                     "  {:<15} {}  (artwork layer: {}/{})",
                     name,
