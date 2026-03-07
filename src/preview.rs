@@ -210,29 +210,43 @@ fn write_html_preview_inner(
 <html><head><meta charset="utf-8"><title>fabbula - {pdk_name} artwork preview</title>
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ background:#0d1117; overflow:hidden; font-family:monospace; color:#c9d1d9; }}
-  #info {{ position:fixed; top:10px; left:10px; background:rgba(13,17,23,0.9); padding:10px 14px;
-           border:1px solid #30363d; border-radius:6px; font-size:13px; z-index:10; }}
-  #info h3 {{ margin-bottom:6px; color:#58a6ff; font-size:14px; }}
+  :root {{ --bg:#0d1117; --fg:#c9d1d9; --panel:rgba(13,17,23,0.9); --border:#30363d; --accent:#58a6ff; --dim:#8b949e; }}
+  [data-theme="light"] {{ --bg:#f5f5f0; --fg:#3a3530; --panel:rgba(255,255,255,0.92); --border:#d0ccc4; --accent:#3a6e96; --dim:#8a8478; }}
+  body {{ background:var(--bg); overflow:hidden; font-family:monospace; color:var(--fg); transition:background 0.3s,color 0.3s; }}
+  #info {{ position:fixed; top:10px; left:10px; background:var(--panel); padding:10px 14px;
+           border:1px solid var(--border); border-radius:6px; font-size:13px; z-index:10; transition:background 0.3s,border-color 0.3s; }}
+  #info h3 {{ margin-bottom:6px; color:var(--accent); font-size:14px; }}
   #info div {{ margin:2px 0; }}
-  #tooltip {{ position:fixed; display:none; background:rgba(13,17,23,0.95); padding:6px 10px;
-              border:1px solid #58a6ff; border-radius:4px; font-size:12px; pointer-events:none; z-index:20; }}
+  #themeBtn {{ position:fixed; top:10px; right:10px; background:var(--panel); border:1px solid var(--border);
+               border-radius:6px; padding:6px 12px; cursor:pointer; font-family:monospace; font-size:13px;
+               color:var(--dim); z-index:10; transition:background 0.3s,border-color 0.3s,color 0.3s; }}
+  #themeBtn:hover {{ color:var(--accent); border-color:var(--accent); }}
+  #tooltip {{ position:fixed; display:none; background:var(--panel); padding:6px 10px;
+              border:1px solid var(--accent); border-radius:4px; font-size:12px; pointer-events:none; z-index:20; }}
   svg {{ display:block; }}
   .r {{ opacity:0.85; }}
-  .r:hover {{ opacity:1; stroke:#58a6ff; stroke-width:{sw}; }}
-</style></head><body>
+  .r:hover {{ opacity:1; stroke:var(--accent); stroke-width:{sw}; }}
+  #bgRect {{ transition:fill 0.3s; }}
+</style>
+<script>
+(function(){{
+  var t=localStorage.getItem('fabbula-theme');
+  if(t) document.documentElement.setAttribute('data-theme',t);
+}})();
+</script></head><body>
+<button id="themeBtn" onclick="(function(){{var r=document.documentElement,c=r.getAttribute('data-theme')==='light'?'dark':'light';r.setAttribute('data-theme',c);localStorage.setItem('fabbula-theme',c);document.getElementById('bgRect').setAttribute('fill',c==='light'?'#f5f5f0':'#0d1117');document.getElementById('themeBtn').textContent=c==='light'?'light':'dark';}})()">dark</button>
 <div id="info">
   <h3>fabbula preview</h3>
   <div>PDK: {pdk_name}</div>
   <div>Polygons: {poly_count}</div>
   <div>Size: {width_um:.1} x {height_um:.1} um</div>
   {legend}
-  <div style="margin-top:6px;color:#8b949e">Scroll to zoom, drag to pan</div>
+  <div style="margin-top:6px;color:var(--dim)">Scroll to zoom, drag to pan</div>
 </div>
 <div id="tooltip"></div>
 <svg id="canvas" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"
      viewBox="{vb_x} {vb_y} {vb_w} {vb_h}">
-  <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="#0d1117"/>
+  <rect id="bgRect" x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="#0d1117"/>
   <g id="art" transform="translate(0, {flip_y}) scale(1, -1)">
 "##,
         pdk_name = pdk.pdk.name,
@@ -328,6 +342,11 @@ fn write_html_preview_inner(
   svg.addEventListener('mouseout', function(e){{
     if(e.target.classList.contains('r')) tooltip.style.display='none';
   }});
+
+  // Apply saved theme on load
+  var th=localStorage.getItem('fabbula-theme')||'dark';
+  document.getElementById('themeBtn').textContent=th;
+  if(th==='light') document.getElementById('bgRect').setAttribute('fill','#f5f5f0');
 }})();
 </script></body></html>
 "##,
