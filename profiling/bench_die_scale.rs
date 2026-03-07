@@ -2,7 +2,7 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use fabbula::artwork::ArtworkBitmap;
 use fabbula::drc::check_drc;
 use fabbula::pdk::PdkConfig;
-use fabbula::polygon::{PolygonStrategy, generate_polygons};
+use fabbula::polygon::{PixelPlacement, PolygonStrategy, generate_polygons};
 use std::time::Duration;
 
 /// ~80% density pattern - matches typical PDK density targets.
@@ -31,7 +31,7 @@ fn bench_greedy_merge_6250(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::GreedyMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -51,7 +51,7 @@ fn bench_greedy_merge_15625(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::GreedyMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -61,8 +61,14 @@ fn bench_greedy_merge_15625(c: &mut Criterion) {
 fn bench_drc_6250(c: &mut Criterion) {
     let bmp = dense_pattern(6250);
     let pdk = PdkConfig::builtin("sky130").unwrap();
-    let rects =
-        generate_polygons(&bmp, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false).unwrap();
+    let rects = generate_polygons(
+        &bmp,
+        &pdk,
+        &pdk.drc,
+        PolygonStrategy::GreedyMerge,
+        PixelPlacement::Separated,
+    )
+    .unwrap();
     let mut group = c.benchmark_group("die_scale");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(30));

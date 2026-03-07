@@ -1,7 +1,7 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use fabbula::artwork::ArtworkBitmap;
 use fabbula::pdk::PdkConfig;
-use fabbula::polygon::{PolygonStrategy, generate_polygons};
+use fabbula::polygon::{PixelPlacement, PolygonStrategy, generate_polygons};
 
 /// ~80% density pattern - matches typical PDK density targets.
 /// Pixel is off when (x + y) % 5 == 0, giving 80% metal fill.
@@ -26,7 +26,7 @@ fn bench_greedy_merge_256(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::GreedyMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -42,7 +42,7 @@ fn bench_greedy_merge_512(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::GreedyMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -58,7 +58,7 @@ fn bench_row_merge_512(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::RowMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -74,7 +74,7 @@ fn bench_pixel_rects_512(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::PixelRects,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -90,7 +90,7 @@ fn bench_greedy_merge_2048(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::GreedyMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -106,7 +106,7 @@ fn bench_row_merge_2048(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::RowMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -122,7 +122,7 @@ fn bench_greedy_merge_4096(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::GreedyMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -138,7 +138,7 @@ fn bench_histogram_merge_256(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::HistogramMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -154,7 +154,7 @@ fn bench_histogram_merge_512(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::HistogramMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -170,7 +170,7 @@ fn bench_histogram_merge_2048(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::HistogramMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });
@@ -186,7 +186,7 @@ fn bench_histogram_merge_4096(c: &mut Criterion) {
                 &pdk,
                 &pdk.drc,
                 PolygonStrategy::HistogramMerge,
-                false,
+                PixelPlacement::Separated,
             );
         });
     });

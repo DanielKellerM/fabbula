@@ -5,39 +5,52 @@
 //! End-to-end integration tests exercising the full pipeline:
 //! image -> bitmap -> polygons -> DRC check -> GDS output.
 
-use fabbula::artwork::{ArtworkBitmap, ThresholdMode, load_artwork};
+use fabbula::artwork::{ArtworkBitmap, DitherMode, ThresholdMode, load_artwork};
 use fabbula::drc::{DrcRule, check_drc};
 use fabbula::gdsio::write_gds;
 use fabbula::pdk::PdkConfig;
-use fabbula::polygon::{PolygonStrategy, generate_polygons};
-use std::path::Path;
+use fabbula::polygon::{PixelPlacement, PolygonStrategy, generate_polygons};
 
-/// Full pipeline with a real image and sky130 PDK.
-/// Skipped in CI where media/input/bear.png is not available.
+/// Full pipeline: load_artwork -> generate_polygons -> DRC -> write_gds.
+/// Uses a programmatic 32x32 checkerboard PNG (no external files needed).
 #[test]
 fn generate_sky130_from_image() {
-    let image_path = Path::new("media/input/bear.png");
-    if !image_path.exists() {
-        eprintln!(
-            "Skipping: {} not found (not available in CI)",
-            image_path.display()
-        );
-        return;
+    let dir = tempfile::tempdir().unwrap();
+    let image_path = dir.path().join("checkerboard.png");
+    let mut imgbuf = image::GrayImage::new(32, 32);
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let on = (x / 4 + y / 4) % 2 == 0;
+            imgbuf.put_pixel(x, y, image::Luma([if on { 255 } else { 0 }]));
+        }
     }
+    imgbuf.save(&image_path).unwrap();
+
     let pdk = PdkConfig::builtin("sky130").unwrap();
-    let bitmap = load_artwork(image_path, ThresholdMode::Otsu, Some((128, 128)), false).unwrap();
+    let bitmap = load_artwork(
+        &image_path,
+        ThresholdMode::Luminance(128),
+        Some((32, 32)),
+        DitherMode::Off,
+    )
+    .unwrap();
     assert!(bitmap.width > 0 && bitmap.height > 0);
 
-    let rects =
-        generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false).unwrap();
+    let rects = generate_polygons(
+        &bitmap,
+        &pdk,
+        &pdk.drc,
+        PolygonStrategy::GreedyMerge,
+        PixelPlacement::Touching,
+    )
+    .unwrap();
     assert!(!rects.is_empty(), "should produce polygons from image");
 
     let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
     assert!(violations.is_empty(), "DRC violations: {:?}", violations);
 
-    let dir = tempfile::tempdir().unwrap();
-    let gds_path = dir.path().join("bear_sky130.gds");
-    write_gds(&rects, &pdk, "bear_art", &gds_path).unwrap();
+    let gds_path = dir.path().join("checkerboard_sky130.gds");
+    write_gds(&rects, &pdk, "checkerboard_art", &gds_path).unwrap();
     assert!(gds_path.exists());
     assert!(
         std::fs::metadata(&gds_path).unwrap().len() > 0,
@@ -45,7 +58,7 @@ fn generate_sky130_from_image() {
     );
 }
 
-/// Full pipeline with touching mode across all PDKs.
+/// Full pipeline with separated mode across all PDKs.
 #[test]
 fn generate_all_pdks_separated_mode() {
     let bitmap = ArtworkBitmap::from_bools(
@@ -60,14 +73,14 @@ fn generate_all_pdks_separated_mode() {
         ],
     );
 
-    for name in PdkConfig::list_builtins() {
-        let pdk = PdkConfig::builtin(name).unwrap();
+    for builtin in PdkConfig::list_builtins() {
+        let pdk = PdkConfig::builtin(builtin.name()).unwrap();
         let rects = generate_polygons(
             &bitmap,
             &pdk,
             &pdk.drc,
             PolygonStrategy::RowMerge,
-            false, // separated mode - guaranteed DRC-clean
+            PixelPlacement::Separated,
         )
         .unwrap();
 
@@ -79,7 +92,7 @@ fn generate_all_pdks_separated_mode() {
         assert!(
             spacing_violations.is_empty(),
             "{}: spacing violations in separated mode: {:?}",
-            name,
+            builtin.name(),
             spacing_violations
         );
     }
@@ -90,8 +103,14 @@ fn generate_all_pdks_separated_mode() {
 fn empty_bitmap_produces_empty_gds() {
     let bitmap = ArtworkBitmap::from_bools(16, 16, &[false; 256]);
     let pdk = PdkConfig::builtin("sky130").unwrap();
-    let rects =
-        generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false).unwrap();
+    let rects = generate_polygons(
+        &bitmap,
+        &pdk,
+        &pdk.drc,
+        PolygonStrategy::GreedyMerge,
+        PixelPlacement::Separated,
+    )
+    .unwrap();
     assert!(rects.is_empty(), "all-white bitmap should produce 0 rects");
 
     let dir = tempfile::tempdir().unwrap();
@@ -106,8 +125,14 @@ fn single_pixel_bitmap() {
     let bitmap = ArtworkBitmap::from_bools(1, 1, &[true]);
     // IHP has min_area=0, so single pixel won't be filtered
     let pdk = PdkConfig::builtin("ihp_sg13g2").unwrap();
-    let rects =
-        generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::PixelRects, false).unwrap();
+    let rects = generate_polygons(
+        &bitmap,
+        &pdk,
+        &pdk.drc,
+        PolygonStrategy::PixelRects,
+        PixelPlacement::Separated,
+    )
+    .unwrap();
     assert_eq!(rects.len(), 1, "single pixel should produce exactly 1 rect");
 
     let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
@@ -136,20 +161,22 @@ fn touching_mode_all_pdks_all_strategies() {
         ],
     );
 
-    for name in PdkConfig::list_builtins() {
-        let pdk = PdkConfig::builtin(name).unwrap();
+    for builtin in PdkConfig::list_builtins() {
+        let pdk = PdkConfig::builtin(builtin.name()).unwrap();
         for strategy in [
             PolygonStrategy::PixelRects,
             PolygonStrategy::RowMerge,
             PolygonStrategy::GreedyMerge,
             PolygonStrategy::HistogramMerge,
         ] {
-            let rects = generate_polygons(&bitmap, &pdk, &pdk.drc, strategy, true).unwrap();
+            let rects =
+                generate_polygons(&bitmap, &pdk, &pdk.drc, strategy, PixelPlacement::Touching)
+                    .unwrap();
             let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
             assert!(
                 violations.is_empty(),
                 "{} {:?} touching mode DRC violations: {:?}",
-                name,
+                builtin.name(),
                 strategy,
                 violations
             );
@@ -179,7 +206,8 @@ fn all_strategies_drc_clean() {
         PolygonStrategy::GreedyMerge,
         PolygonStrategy::HistogramMerge,
     ] {
-        let rects = generate_polygons(&bitmap, &pdk, &pdk.drc, strategy, false).unwrap();
+        let rects = generate_polygons(&bitmap, &pdk, &pdk.drc, strategy, PixelPlacement::Separated)
+            .unwrap();
         let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
         assert!(
             violations.is_empty(),
@@ -192,19 +220,17 @@ fn all_strategies_drc_clean() {
 
 /// Coordinate overflow is detected for extremely large bitmaps.
 /// sky130 pitch = 3200 dbu. Need dim > i32::MAX / 3200 ~ 671,000 to overflow.
-/// We test with a unit test in polygon.rs instead since creating a 671K bitmap
-/// is impractical. Here we verify the overflow guard exists by checking the
-/// error message format with a custom PDK-like setup.
 #[test]
 fn coordinate_overflow_detected() {
-    // Use a bitmap just large enough to overflow: 700,000 * 3200 > i32::MAX
-    // But 700K*700K bools = 490 billion, that's way too much memory.
-    // Instead, use a reasonable size but verify the check exists via a narrow bitmap.
-    // With sky130 pitch=3200, width=700000 -> max_x = 699999*3200+1600 = 2,239,998,400 > i32::MAX
-    // ArtworkBitmap stores Vec<bool>, so 700000*1 = 700K bools = ~700KB, OK.
     let bitmap = ArtworkBitmap::from_bools(700_000, 1, &vec![false; 700_000]);
     let pdk = PdkConfig::builtin("sky130").unwrap();
-    let result = generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::PixelRects, false);
+    let result = generate_polygons(
+        &bitmap,
+        &pdk,
+        &pdk.drc,
+        PolygonStrategy::PixelRects,
+        PixelPlacement::Separated,
+    );
     assert!(result.is_err(), "should detect coordinate overflow");
     assert!(
         result.unwrap_err().to_string().contains("overflow"),
@@ -218,8 +244,14 @@ fn min_area_filters_small_rects() {
     // Single pixel with sky130: pixel_w = 1.6um -> area = 2.56 um^2 < min_area 4.0
     let bitmap = ArtworkBitmap::from_bools(1, 1, &[true]);
     let pdk = PdkConfig::builtin("sky130").unwrap();
-    let rects =
-        generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::PixelRects, false).unwrap();
+    let rects = generate_polygons(
+        &bitmap,
+        &pdk,
+        &pdk.drc,
+        PolygonStrategy::PixelRects,
+        PixelPlacement::Separated,
+    )
+    .unwrap();
     assert!(
         rects.is_empty(),
         "single pixel should be filtered by min_area on sky130"
@@ -232,7 +264,7 @@ fn min_area_filters_small_rects() {
         &pdk,
         &pdk.drc,
         PolygonStrategy::GreedyMerge,
-        false,
+        PixelPlacement::Separated,
     )
     .unwrap();
     assert!(

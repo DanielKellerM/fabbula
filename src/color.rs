@@ -11,7 +11,11 @@
 use crate::artwork::{ArtworkBitmap, ThresholdMode};
 use crate::pdk::ArtworkLayerProfile;
 use anyhow::Result;
+use rayon::prelude::*;
 use std::path::Path;
+
+const KMEANS_PARALLEL_THRESHOLD: usize = 100_000;
+const KMEANS_MAX_SAMPLES: usize = 50_000;
 
 /// Color extraction mode for multi-layer artwork
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,20 +151,46 @@ pub fn extract_palette(
     let img = load_image(path, max_pixels)?;
     let (width, height) = image::GenericImageView::dimensions(&img);
     let rgb = img.to_rgb8();
-    let pixels: Vec<[f32; 3]> = rgb
-        .pixels()
-        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
-        .collect();
+    let total_pixels = (width as usize) * (height as usize);
 
     // Quantize into num_layers + 1 clusters: the extra one captures background
     let k = num_layers + 1;
-    let centroids = kmeans(&pixels, k, 15);
 
-    // Assign each pixel to nearest centroid
-    let assignments: Vec<usize> = pixels
-        .iter()
-        .map(|px| nearest_centroid(px, &centroids))
-        .collect();
+    // Subsample pixels for k-means training if the image is large
+    let centroids = if total_pixels > KMEANS_MAX_SAMPLES {
+        let step = total_pixels / KMEANS_MAX_SAMPLES;
+        let samples: Vec<[f32; 3]> = rgb
+            .pixels()
+            .step_by(step.max(1))
+            .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+            .collect();
+        kmeans(&samples, k, 15)
+    } else {
+        let pixels: Vec<[f32; 3]> = rgb
+            .pixels()
+            .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+            .collect();
+        kmeans(&pixels, k, 15)
+    };
+
+    // Assign each pixel to nearest centroid (directly from image iterator)
+    let assignments: Vec<usize> = if total_pixels >= KMEANS_PARALLEL_THRESHOLD {
+        let pixels: Vec<[f32; 3]> = rgb
+            .pixels()
+            .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+            .collect();
+        pixels
+            .par_iter()
+            .map(|px| nearest_centroid(px, &centroids))
+            .collect()
+    } else {
+        rgb.pixels()
+            .map(|p| {
+                let px = [p[0] as f32, p[1] as f32, p[2] as f32];
+                nearest_centroid(&px, &centroids)
+            })
+            .collect()
+    };
 
     // Sort centroids by luminance (darkest first)
     let mut centroid_order: Vec<usize> = (0..k).collect();
@@ -266,14 +296,28 @@ fn kmeans(pixels: &[[f32; 3]], k: usize, max_iters: usize) -> Vec<[f32; 3]> {
 
     for iter in 0..max_iters {
         // Assign pixels to nearest centroid
-        let mut changed = false;
-        for (i, px) in pixels.iter().enumerate() {
-            let nearest = nearest_centroid(px, &centroids);
-            if nearest != assignments[i] {
-                assignments[i] = nearest;
-                changed = true;
+        let changed = if n >= KMEANS_PARALLEL_THRESHOLD {
+            let new_assignments: Vec<usize> = pixels
+                .par_iter()
+                .map(|px| nearest_centroid(px, &centroids))
+                .collect();
+            let any_changed = new_assignments
+                .iter()
+                .zip(assignments.iter())
+                .any(|(a, b)| a != b);
+            assignments = new_assignments;
+            any_changed
+        } else {
+            let mut changed = false;
+            for (i, px) in pixels.iter().enumerate() {
+                let nearest = nearest_centroid(px, &centroids);
+                if nearest != assignments[i] {
+                    assignments[i] = nearest;
+                    changed = true;
+                }
             }
-        }
+            changed
+        };
 
         if !changed {
             tracing::debug!("K-means converged after {} iterations", iter + 1);
@@ -281,16 +325,46 @@ fn kmeans(pixels: &[[f32; 3]], k: usize, max_iters: usize) -> Vec<[f32; 3]> {
             break;
         }
 
-        // Update centroids
-        let mut sums = vec![[0.0f64; 3]; k];
-        let mut counts = vec![0u64; k];
-        for (i, px) in pixels.iter().enumerate() {
-            let c = assignments[i];
-            sums[c][0] += px[0] as f64;
-            sums[c][1] += px[1] as f64;
-            sums[c][2] += px[2] as f64;
-            counts[c] += 1;
-        }
+        // Update centroids - parallel accumulation for large datasets
+        let (sums, counts) = if n >= KMEANS_PARALLEL_THRESHOLD {
+            pixels
+                .par_chunks(8192)
+                .zip(assignments.par_chunks(8192))
+                .map(|(px_chunk, assign_chunk)| {
+                    let mut local_sums = vec![[0.0f64; 3]; k];
+                    let mut local_counts = vec![0u64; k];
+                    for (px, &c) in px_chunk.iter().zip(assign_chunk.iter()) {
+                        local_sums[c][0] += px[0] as f64;
+                        local_sums[c][1] += px[1] as f64;
+                        local_sums[c][2] += px[2] as f64;
+                        local_counts[c] += 1;
+                    }
+                    (local_sums, local_counts)
+                })
+                .reduce(
+                    || (vec![[0.0f64; 3]; k], vec![0u64; k]),
+                    |(mut sums_a, mut counts_a), (sums_b, counts_b)| {
+                        for j in 0..k {
+                            sums_a[j][0] += sums_b[j][0];
+                            sums_a[j][1] += sums_b[j][1];
+                            sums_a[j][2] += sums_b[j][2];
+                            counts_a[j] += counts_b[j];
+                        }
+                        (sums_a, counts_a)
+                    },
+                )
+        } else {
+            let mut sums = vec![[0.0f64; 3]; k];
+            let mut counts = vec![0u64; k];
+            for (i, px) in pixels.iter().enumerate() {
+                let c = assignments[i];
+                sums[c][0] += px[0] as f64;
+                sums[c][1] += px[1] as f64;
+                sums[c][2] += px[2] as f64;
+                counts[c] += 1;
+            }
+            (sums, counts)
+        };
 
         // Pre-compute replacements for empty clusters (diverse pixels)
         let empty_indices: Vec<usize> = counts

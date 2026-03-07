@@ -16,6 +16,89 @@ pub(crate) fn um_to_dbu(um: f64, db_units_per_um: u32) -> i32 {
     (um * db_units_per_um as f64).round() as i32
 }
 
+/// Built-in PDK identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinPdk {
+    Sky130,
+    IhpSg13g2,
+    Gf180mcu,
+    FreePdk45,
+    Asap7,
+    Fabbula2,
+}
+
+impl BuiltinPdk {
+    /// All built-in PDK variants.
+    pub fn all() -> &'static [BuiltinPdk] {
+        &[
+            BuiltinPdk::Sky130,
+            BuiltinPdk::IhpSg13g2,
+            BuiltinPdk::Gf180mcu,
+            BuiltinPdk::FreePdk45,
+            BuiltinPdk::Asap7,
+            BuiltinPdk::Fabbula2,
+        ]
+    }
+
+    /// Return the embedded TOML content for this PDK.
+    pub fn toml_content(self) -> &'static str {
+        match self {
+            BuiltinPdk::Sky130 => include_str!("../pdks/sky130.toml"),
+            BuiltinPdk::IhpSg13g2 => include_str!("../pdks/ihp_sg13g2.toml"),
+            BuiltinPdk::Gf180mcu => include_str!("../pdks/gf180mcu.toml"),
+            BuiltinPdk::FreePdk45 => include_str!("../pdks/freepdk45.toml"),
+            BuiltinPdk::Asap7 => include_str!("../pdks/asap7.toml"),
+            BuiltinPdk::Fabbula2 => include_str!("../pdks/fabbula2.toml"),
+        }
+    }
+
+    /// Canonical name string for this PDK.
+    pub fn name(self) -> &'static str {
+        match self {
+            BuiltinPdk::Sky130 => "sky130",
+            BuiltinPdk::IhpSg13g2 => "ihp_sg13g2",
+            BuiltinPdk::Gf180mcu => "gf180mcu",
+            BuiltinPdk::FreePdk45 => "freepdk45",
+            BuiltinPdk::Asap7 => "asap7",
+            BuiltinPdk::Fabbula2 => "fabbula2",
+        }
+    }
+}
+
+impl std::fmt::Display for BuiltinPdk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl std::str::FromStr for BuiltinPdk {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "sky130" => Ok(BuiltinPdk::Sky130),
+            "ihp_sg13g2" | "ihp" | "sg13g2" => Ok(BuiltinPdk::IhpSg13g2),
+            "gf180mcu" | "gf180" => Ok(BuiltinPdk::Gf180mcu),
+            "freepdk45" => Ok(BuiltinPdk::FreePdk45),
+            "asap7" => Ok(BuiltinPdk::Asap7),
+            "fabbula2" => Ok(BuiltinPdk::Fabbula2),
+            other => anyhow::bail!(
+                "Unknown built-in PDK '{}'. Available: sky130, ihp_sg13g2, gf180mcu, freepdk45, asap7, fabbula2",
+                other
+            ),
+        }
+    }
+}
+
+/// Whether to use the primary or alternative artwork layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerVariant {
+    /// Primary artwork layer (default).
+    Primary,
+    /// Alternative artwork layer (if available in the PDK).
+    Alternative,
+}
+
 /// PDK metadata
 #[derive(Debug, Clone, Deserialize)]
 pub struct PdkInfo {
@@ -79,6 +162,96 @@ impl DrcRules {
             return wide_spacing.max(self.min_spacing);
         }
         self.min_spacing
+    }
+
+    /// Validate DRC rules for consistency.
+    pub fn validate(&self, section: &str) -> Result<()> {
+        anyhow::ensure!(
+            self.min_width > 0.0,
+            "{} min_width must be positive, got {}",
+            section,
+            self.min_width
+        );
+        anyhow::ensure!(
+            self.min_spacing > 0.0,
+            "{} min_spacing must be positive, got {}",
+            section,
+            self.min_spacing
+        );
+        anyhow::ensure!(
+            self.density_max > 0.0 && self.density_max <= 1.0,
+            "{} density_max must be in (0, 1]",
+            section
+        );
+        if let Some(max_w) = self.max_width {
+            anyhow::ensure!(
+                max_w > self.min_width,
+                "{} max_width ({}) must be > min_width ({})",
+                section,
+                max_w,
+                self.min_width
+            );
+        }
+        anyhow::ensure!(
+            self.min_area >= 0.0,
+            "{} min_area must be non-negative, got {}",
+            section,
+            self.min_area
+        );
+        anyhow::ensure!(
+            self.density_min >= 0.0 && self.density_min <= 1.0,
+            "{} density_min must be in [0, 1], got {}",
+            section,
+            self.density_min
+        );
+        anyhow::ensure!(
+            self.density_min <= self.density_max,
+            "{} density_min ({}) must be <= density_max ({})",
+            section,
+            self.density_min,
+            self.density_max
+        );
+        if let Some(wide_s) = self.wide_metal_spacing {
+            anyhow::ensure!(
+                wide_s >= self.min_spacing,
+                "{} wide_metal_spacing ({}) must be >= min_spacing ({})",
+                section,
+                wide_s,
+                self.min_spacing
+            );
+        }
+        Ok(())
+    }
+
+    /// Build a DRC rule set with the most conservative (largest) values across all rules.
+    /// This ensures all layers use the same pixel pitch and align spatially in multi-layer mode.
+    pub fn most_conservative(rules: &[DrcRules]) -> Self {
+        assert!(
+            !rules.is_empty(),
+            "most_conservative requires at least one DrcRules"
+        );
+        let mut drc = rules[0].clone();
+        for p in &rules[1..] {
+            drc.min_width = drc.min_width.max(p.min_width);
+            drc.min_spacing = drc.min_spacing.max(p.min_spacing);
+            drc.min_area = drc.min_area.max(p.min_area);
+            match (drc.max_width, p.max_width) {
+                (Some(a), Some(b)) => drc.max_width = Some(a.min(b)),
+                (None, Some(b)) => drc.max_width = Some(b),
+                _ => {}
+            }
+            match (drc.wide_metal_threshold, p.wide_metal_threshold) {
+                (Some(a), Some(b)) => drc.wide_metal_threshold = Some(a.min(b)),
+                (None, Some(b)) => drc.wide_metal_threshold = Some(b),
+                _ => {}
+            }
+            match (drc.wide_metal_spacing, p.wide_metal_spacing) {
+                (Some(a), Some(b)) => drc.wide_metal_spacing = Some(a.max(b)),
+                (None, Some(b)) => drc.wide_metal_spacing = Some(b),
+                _ => {}
+            }
+        }
+        drc
     }
 }
 
@@ -150,43 +323,24 @@ impl PdkConfig {
 
     /// Load a built-in PDK by name
     pub fn builtin(name: &str) -> Result<Self> {
-        let toml_str = match name {
-            "sky130" => include_str!("../pdks/sky130.toml"),
-            "ihp_sg13g2" | "ihp" | "sg13g2" => include_str!("../pdks/ihp_sg13g2.toml"),
-            "gf180mcu" | "gf180" => include_str!("../pdks/gf180mcu.toml"),
-            "freepdk45" => include_str!("../pdks/freepdk45.toml"),
-            "asap7" => include_str!("../pdks/asap7.toml"),
-            "fabbula2" => include_str!("../pdks/fabbula2.toml"),
-            other => anyhow::bail!(
-                "Unknown built-in PDK '{}'. Available: sky130, ihp_sg13g2, gf180mcu, freepdk45, asap7, fabbula2",
-                other
-            ),
-        };
-        let config: PdkConfig = toml::from_str(toml_str)?;
+        let pdk_id: BuiltinPdk = name.parse()?;
+        let config: PdkConfig = toml::from_str(pdk_id.toml_content())?;
         config.validate()?;
         Ok(config)
     }
 
     /// List available built-in PDKs
-    pub fn list_builtins() -> &'static [&'static str] {
-        &[
-            "sky130",
-            "ihp_sg13g2",
-            "gf180mcu",
-            "freepdk45",
-            "asap7",
-            "fabbula2",
-        ]
+    pub fn list_builtins() -> &'static [BuiltinPdk] {
+        BuiltinPdk::all()
     }
 
-    /// Return the DRC rules for the active layer.
-    /// When `use_alt` is true and `drc_alt` exists, return alt rules;
+    /// Return the DRC rules for the active layer variant.
+    /// When `variant` is `Alternative` and `drc_alt` exists, return alt rules;
     /// otherwise fall back to the primary `drc` rules.
-    pub fn active_drc(&self, use_alt: bool) -> &DrcRules {
-        if use_alt {
-            self.drc_alt.as_ref().unwrap_or(&self.drc)
-        } else {
-            &self.drc
+    pub fn active_drc(&self, variant: LayerVariant) -> &DrcRules {
+        match variant {
+            LayerVariant::Alternative => self.drc_alt.as_ref().unwrap_or(&self.drc),
+            LayerVariant::Primary => &self.drc,
         }
     }
 
@@ -229,13 +383,15 @@ impl PdkConfig {
     }
 
     fn validate(&self) -> Result<()> {
-        Self::validate_drc_rules(&self.drc, "drc")?;
+        self.drc.validate("drc")?;
         if let Some(ref alt) = self.drc_alt {
-            Self::validate_drc_rules(alt, "drc_alt")?;
+            alt.validate("drc_alt")?;
         }
         if let Some(ref layers) = self.artwork_layers {
             for (i, profile) in layers.iter().enumerate() {
-                Self::validate_drc_rules(&profile.drc, &format!("artwork_layers[{}].drc", i))?;
+                profile
+                    .drc
+                    .validate(&format!("artwork_layers[{}].drc", i))?;
             }
         }
         anyhow::ensure!(
@@ -255,64 +411,6 @@ impl PdkConfig {
                 "artwork_layer and artwork_layer_alt have the same GDS layer/datatype ({}/{})",
                 self.artwork_layer.gds_layer,
                 self.artwork_layer.gds_datatype
-            );
-        }
-        Ok(())
-    }
-
-    fn validate_drc_rules(rules: &DrcRules, section: &str) -> Result<()> {
-        anyhow::ensure!(
-            rules.min_width > 0.0,
-            "{} min_width must be positive, got {}",
-            section,
-            rules.min_width
-        );
-        anyhow::ensure!(
-            rules.min_spacing > 0.0,
-            "{} min_spacing must be positive, got {}",
-            section,
-            rules.min_spacing
-        );
-        anyhow::ensure!(
-            rules.density_max > 0.0 && rules.density_max <= 1.0,
-            "{} density_max must be in (0, 1]",
-            section
-        );
-        if let Some(max_w) = rules.max_width {
-            anyhow::ensure!(
-                max_w > rules.min_width,
-                "{} max_width ({}) must be > min_width ({})",
-                section,
-                max_w,
-                rules.min_width
-            );
-        }
-        anyhow::ensure!(
-            rules.min_area >= 0.0,
-            "{} min_area must be non-negative, got {}",
-            section,
-            rules.min_area
-        );
-        anyhow::ensure!(
-            rules.density_min >= 0.0 && rules.density_min <= 1.0,
-            "{} density_min must be in [0, 1], got {}",
-            section,
-            rules.density_min
-        );
-        anyhow::ensure!(
-            rules.density_min <= rules.density_max,
-            "{} density_min ({}) must be <= density_max ({})",
-            section,
-            rules.density_min,
-            rules.density_max
-        );
-        if let Some(wide_s) = rules.wide_metal_spacing {
-            anyhow::ensure!(
-                wide_s >= rules.min_spacing,
-                "{} wide_metal_spacing ({}) must be >= min_spacing ({})",
-                section,
-                wide_s,
-                rules.min_spacing
             );
         }
         Ok(())
@@ -600,6 +698,71 @@ manufacturing_grid_um = 0.005
         // Also test the free function directly
         assert_eq!(um_to_dbu(1.0, 1000), 1000);
         assert_eq!(um_to_dbu(2.5, 2000), 5000);
+    }
+
+    #[test]
+    fn test_most_conservative() {
+        let rules1 = DrcRules {
+            min_width: 1.0,
+            min_spacing: 0.5,
+            min_area: 0.0,
+            density_min: 0.0,
+            density_max: 0.80,
+            density_window_um: 500.0,
+            max_width: Some(10.0),
+            wide_metal_threshold: None,
+            wide_metal_spacing: None,
+        };
+        let rules2 = DrcRules {
+            min_width: 2.0,
+            min_spacing: 0.3,
+            min_area: 1.0,
+            density_min: 0.0,
+            density_max: 0.77,
+            density_window_um: 50.0,
+            max_width: Some(5.0),
+            wide_metal_threshold: Some(1.5),
+            wide_metal_spacing: Some(0.4),
+        };
+        let mc = DrcRules::most_conservative(&[rules1, rules2]);
+        assert!((mc.min_width - 2.0).abs() < 1e-9);
+        assert!((mc.min_spacing - 0.5).abs() < 1e-9);
+        assert!((mc.min_area - 1.0).abs() < 1e-9);
+        assert_eq!(mc.max_width, Some(5.0));
+        assert_eq!(mc.wide_metal_threshold, Some(1.5));
+        assert_eq!(mc.wide_metal_spacing, Some(0.4));
+    }
+
+    #[test]
+    fn test_drc_rules_validate_ok() {
+        let rules = DrcRules {
+            min_width: 1.0,
+            min_spacing: 0.5,
+            min_area: 0.0,
+            density_min: 0.0,
+            density_max: 0.80,
+            density_window_um: 500.0,
+            max_width: None,
+            wide_metal_threshold: None,
+            wide_metal_spacing: None,
+        };
+        assert!(rules.validate("test").is_ok());
+    }
+
+    #[test]
+    fn test_drc_rules_validate_rejects_zero_width() {
+        let rules = DrcRules {
+            min_width: 0.0,
+            min_spacing: 0.5,
+            min_area: 0.0,
+            density_min: 0.0,
+            density_max: 0.80,
+            density_window_um: 500.0,
+            max_width: None,
+            wide_metal_threshold: None,
+            wide_metal_spacing: None,
+        };
+        assert!(rules.validate("test").is_err());
     }
 
     #[test]

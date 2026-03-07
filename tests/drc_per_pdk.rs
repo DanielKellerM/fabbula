@@ -19,8 +19,9 @@ fn dbu(pdk: &PdkConfig, um: f64) -> i32 {
 /// Collect all (pdk, drc_rules, label) combos to test.
 fn all_pdk_rule_sets() -> Vec<(PdkConfig, DrcRules, String)> {
     let mut sets = Vec::new();
-    for name in PdkConfig::list_builtins() {
-        let pdk = PdkConfig::builtin(name).unwrap();
+    for builtin in PdkConfig::list_builtins() {
+        let pdk = PdkConfig::builtin(builtin.name()).unwrap();
+        let name = builtin.name();
         sets.push((pdk.clone(), pdk.drc.clone(), format!("{}/primary", name)));
         if let Some(alt) = &pdk.drc_alt {
             sets.push((pdk.clone(), alt.clone(), format!("{}/alt", name)));

@@ -143,6 +143,15 @@ impl ArtworkBitmap {
     }
 }
 
+/// Whether to apply Floyd-Steinberg dithering before thresholding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DitherMode {
+    /// No dithering - hard threshold edges.
+    Off,
+    /// Floyd-Steinberg error diffusion dithering.
+    FloydSteinberg,
+}
+
 /// How to interpret the image for thresholding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -283,14 +292,14 @@ pub fn load_image_file(path: &Path, max_pixels: Option<(u32, u32)>) -> Result<Dy
 /// total pixel count for the artwork doesn't exceed it (useful for
 /// keeping GDSII file sizes reasonable).
 ///
-/// If `dither` is true, Floyd-Steinberg dithering is applied before
-/// thresholding, producing dot patterns for gradients instead of hard edges.
+/// If `dither` is [`DitherMode::FloydSteinberg`], error diffusion dithering is applied
+/// before thresholding, producing dot patterns for gradients instead of hard edges.
 #[must_use = "loaded artwork bitmap should be used for polygon generation"]
 pub fn load_artwork(
     path: &Path,
     threshold: ThresholdMode,
     max_pixels: Option<(u32, u32)>,
-    dither: bool,
+    dither: DitherMode,
 ) -> Result<ArtworkBitmap> {
     let img = load_image_file(path, if is_svg(path) { max_pixels } else { None })?;
 
@@ -332,7 +341,7 @@ pub fn load_artwork(
     let bools: Vec<bool> = match threshold {
         ThresholdMode::Luminance(thresh) => {
             let mut gray = img.to_luma8();
-            if dither {
+            if dither == DitherMode::FloydSteinberg {
                 floyd_steinberg_dither(&mut gray, thresh);
             }
             gray.pixels().map(|Luma([v])| *v < thresh).collect()
@@ -341,13 +350,13 @@ pub fn load_artwork(
             let mut gray = img.to_luma8();
             let thresh = otsu_threshold(&gray);
             tracing::info!("Otsu threshold: {}", thresh);
-            if dither {
+            if dither == DitherMode::FloydSteinberg {
                 floyd_steinberg_dither(&mut gray, thresh);
             }
             gray.pixels().map(|Luma([v])| *v < thresh).collect()
         }
         ThresholdMode::Alpha(thresh) => {
-            if dither {
+            if dither == DitherMode::FloydSteinberg {
                 // Dither the alpha channel
                 let rgba = img.to_rgba8();
                 let mut alpha_gray = image::GrayImage::from_raw(
@@ -608,7 +617,9 @@ pub fn enforce_density(bitmap: &mut ArtworkBitmap, density_max: f64, window_pixe
         build_sat_from(bitmap, w, h, &mut sat, min_dirty_y);
 
         // Find violating windows, sorted worst-first
-        let mut violations: Vec<(u32, u32, u32)> = Vec::new(); // (count, wx, wy)
+        let grid_w = ((w.saturating_sub(win)) / step + 1) as usize;
+        let grid_h = ((h.saturating_sub(win)) / step + 1) as usize;
+        let mut violations: Vec<(u32, u32, u32)> = Vec::with_capacity(grid_w * grid_h / 4);
         let mut wx = 0u32;
         while wx + win <= w {
             let mut wy = 0u32;
@@ -631,6 +642,7 @@ pub fn enforce_density(bitmap: &mut ArtworkBitmap, density_max: f64, window_pixe
 
         let mut cleared_this_iter = 0usize;
         min_dirty_y = h; // Track earliest modified row for next iteration
+        let mut candidates: Vec<(u8, u32, u32)> = Vec::with_capacity((win * win) as usize);
 
         for &(_count, vx, vy) in &violations {
             // Recount since previous removals in this iteration may have helped
@@ -641,7 +653,7 @@ pub fn enforce_density(bitmap: &mut ArtworkBitmap, density_max: f64, window_pixe
             let excess = current - max_count;
 
             // Collect on-pixels in window, scored by neighbor count (8-connected)
-            let mut candidates: Vec<(u8, u32, u32)> = Vec::new();
+            candidates.clear();
             for py in vy..vy + win {
                 for px in vx..vx + win {
                     if bitmap.get(px, py) {

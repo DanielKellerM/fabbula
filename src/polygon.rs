@@ -14,6 +14,25 @@ use crate::pdk::{DrcRules, PdkConfig};
 use anyhow::Result;
 use rayon::prelude::*;
 
+/// A 2D point in database units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Point {
+    pub fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+}
+
+impl std::fmt::Display for Point {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+
 /// A rectangle in database units (nm typically)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rect {
@@ -75,6 +94,22 @@ impl Rect {
     }
 }
 
+/// Whether adjacent pixels touch or have guaranteed spacing between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelPlacement {
+    /// Adjacent ON pixels produce touching/merged rectangles.
+    /// Gaps only appear where the bitmap has OFF pixels.
+    Touching,
+    /// Every pixel is separated by min_spacing, guaranteeing spacing between all features.
+    Separated,
+}
+
+impl PixelPlacement {
+    pub fn is_touching(self) -> bool {
+        self == PixelPlacement::Touching
+    }
+}
+
 /// Strategy for converting bitmap pixels to polygons
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -119,8 +154,9 @@ pub fn generate_polygons(
     pdk: &PdkConfig,
     drc: &DrcRules,
     strategy: PolygonStrategy,
-    touching: bool,
+    placement: PixelPlacement,
 ) -> Result<Vec<Rect>> {
+    let touching = placement.is_touching();
     let min_w_um = pdk.snap_to_grid(drc.min_width);
     let eff_s_um = pdk.snap_to_grid(drc.effective_spacing());
 
@@ -212,6 +248,15 @@ const PARALLEL_PIXEL_THRESHOLD: usize = 800_000;
 /// Height of each horizontal strip for parallel greedy merge
 const STRIP_HEIGHT: usize = 256;
 
+/// Convert image Y coordinate (top-down, 0 at top) to layout Y coordinate (bottom-up).
+///
+/// In the bitmap, row 0 is the top of the image. In layout coordinates,
+/// Y increases upward, so we flip: layout_y = (height - 1 - image_y) * pitch.
+#[inline]
+fn image_y_to_layout(image_y: u32, image_height: u32, pitch: i32) -> i32 {
+    (image_height - 1 - image_y) as i32 * pitch
+}
+
 /// Simplest: one rectangle per pixel
 fn pixel_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
     let total = bitmap.width as usize * bitmap.height as usize;
@@ -221,7 +266,7 @@ fn pixel_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
     (0..bitmap.height)
         .into_par_iter()
         .flat_map_iter(|y| {
-            let y0 = (bitmap.height - 1 - y) as i32 * pitch;
+            let y0 = image_y_to_layout(y, bitmap.height, pitch);
             (0..bitmap.width).filter_map(move |x| {
                 if bitmap.get(x, y) {
                     let x0 = x as i32 * pitch;
@@ -240,7 +285,7 @@ fn pixel_rects_serial(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<R
         for x in 0..bitmap.width {
             if bitmap.get(x, y) {
                 let x0 = x as i32 * pitch;
-                let y0 = (bitmap.height - 1 - y) as i32 * pitch;
+                let y0 = image_y_to_layout(y, bitmap.height, pitch);
                 rects.push(Rect::new(x0, y0, x0 + pixel_w, y0 + pixel_w));
             }
         }
@@ -252,7 +297,7 @@ fn pixel_rects_serial(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<R
 fn row_merged_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32, max_merge: u16) -> Vec<Rect> {
     let mut rects = Vec::with_capacity(bitmap.metal_count());
     for y in 0..bitmap.height {
-        let y0 = (bitmap.height - 1 - y) as i32 * pitch;
+        let y0 = image_y_to_layout(y, bitmap.height, pitch);
         let mut run_start: Option<u32> = None;
         for x in 0..=bitmap.width {
             let on = x < bitmap.width && bitmap.get(x, y);
@@ -1072,5 +1117,171 @@ mod tests {
             format!("{}", PolygonStrategy::HistogramMerge),
             "histogram-merge"
         );
+    }
+
+    /// Test parallel code path for GreedyMerge (requires >= 800K pixels and height > 256).
+    #[test]
+    fn test_greedy_merge_parallel_path() {
+        let size = 1000u32;
+        let bools: Vec<bool> = (0..size * size)
+            .map(|i| {
+                let x = i % size;
+                let y = i / size;
+                !(x + y).is_multiple_of(3)
+            })
+            .collect();
+        let bmp = ArtworkBitmap::from_bools(size, size, &bools);
+        assert!(
+            (size as usize * size as usize) >= PARALLEL_PIXEL_THRESHOLD,
+            "bitmap must exceed parallel threshold"
+        );
+        assert!(
+            (size as usize) > STRIP_HEIGHT,
+            "height must exceed strip height"
+        );
+        let pdk = crate::pdk::PdkConfig::builtin("fabbula2").unwrap();
+        let rects = generate_polygons(
+            &bmp,
+            &pdk,
+            &pdk.drc,
+            PolygonStrategy::GreedyMerge,
+            PixelPlacement::Separated,
+        )
+        .unwrap();
+        assert!(!rects.is_empty());
+        // Verify all rects have positive area
+        for r in &rects {
+            assert!(r.width() > 0 && r.height() > 0);
+        }
+    }
+
+    /// Test parallel code path for HistogramMerge.
+    #[test]
+    fn test_histogram_merge_parallel_path() {
+        let size = 1000u32;
+        let bools: Vec<bool> = (0..size * size)
+            .map(|i| {
+                let x = i % size;
+                let y = i / size;
+                !(x + y).is_multiple_of(3)
+            })
+            .collect();
+        let bmp = ArtworkBitmap::from_bools(size, size, &bools);
+        let pdk = crate::pdk::PdkConfig::builtin("fabbula2").unwrap();
+        let rects = generate_polygons(
+            &bmp,
+            &pdk,
+            &pdk.drc,
+            PolygonStrategy::HistogramMerge,
+            PixelPlacement::Separated,
+        )
+        .unwrap();
+        assert!(!rects.is_empty());
+        for r in &rects {
+            assert!(r.width() > 0 && r.height() > 0);
+        }
+    }
+
+    #[test]
+    fn test_point_display() {
+        let p = Point::new(100, 200);
+        assert_eq!(format!("{}", p), "(100, 200)");
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn rect_new_normalizes(x0 in -10_000i32..10_000, y0 in -10_000i32..10_000,
+                               x1 in -10_000i32..10_000, y1 in -10_000i32..10_000) {
+            let r = Rect::new(x0, y0, x1, y1);
+            prop_assert!(r.x0 <= r.x1, "x0={} > x1={}", r.x0, r.x1);
+            prop_assert!(r.y0 <= r.y1, "y0={} > y1={}", r.y0, r.y1);
+            prop_assert!(r.width() >= 0);
+            prop_assert!(r.height() >= 0);
+            prop_assert!(r.area() >= 0);
+        }
+
+        #[test]
+        fn bounding_box_contains_all(rects in prop::collection::vec(
+            ((-10_000i32..10_000), (-10_000i32..10_000),
+             (-10_000i32..10_000), (-10_000i32..10_000))
+                .prop_map(|(x0, y0, x1, y1)| Rect::new(x0, y0, x1, y1)),
+            1..20
+        )) {
+            let bb = bounding_box(&rects).unwrap();
+            for r in &rects {
+                prop_assert!(bb.x0 <= r.x0, "bb.x0={} > r.x0={}", bb.x0, r.x0);
+                prop_assert!(bb.y0 <= r.y0, "bb.y0={} > r.y0={}", bb.y0, r.y0);
+                prop_assert!(bb.x1 >= r.x1, "bb.x1={} < r.x1={}", bb.x1, r.x1);
+                prop_assert!(bb.y1 >= r.y1, "bb.y1={} < r.y1={}", bb.y1, r.y1);
+            }
+        }
+
+        #[test]
+        fn pixel_rects_covers_all_on_pixels(
+            width in 1u32..32, height in 1u32..32,
+            seed in prop::collection::vec(any::<bool>(), 1..1025)
+        ) {
+            let n = (width * height) as usize;
+            let bools: Vec<bool> = seed.iter().cycle().take(n).copied().collect();
+            let expected_on = bools.iter().filter(|&&b| b).count();
+            let bmp = ArtworkBitmap::from_bools(width, height, &bools);
+            let rects = pixel_rects(&bmp, 100, 200);
+            prop_assert_eq!(rects.len(), expected_on);
+        }
+
+        #[test]
+        fn row_merge_preserves_pixel_count(
+            width in 1u32..32, height in 1u32..32,
+            seed in prop::collection::vec(any::<bool>(), 1..1025)
+        ) {
+            let n = (width * height) as usize;
+            let bools: Vec<bool> = seed.iter().cycle().take(n).copied().collect();
+            let expected_on = bools.iter().filter(|&&b| b).count();
+            let bmp = ArtworkBitmap::from_bools(width, height, &bools);
+            let pitch = 200i32;
+            let min_width = 100i32;
+            let rects = row_merged_rects(&bmp, min_width, pitch, u16::MAX);
+            let total_pixels: i64 = rects.iter().map(|r| {
+                let cols = (r.width() - min_width) / pitch + 1;
+                cols as i64
+            }).sum();
+            prop_assert_eq!(total_pixels as usize, expected_on);
+        }
+
+        #[test]
+        fn greedy_merge_preserves_area(
+            width in 1u32..32, height in 1u32..32,
+            seed in prop::collection::vec(any::<bool>(), 1..1025)
+        ) {
+            let n = (width * height) as usize;
+            let bools: Vec<bool> = seed.iter().cycle().take(n).copied().collect();
+            let expected_on = bools.iter().filter(|&&b| b).count();
+            let bmp = ArtworkBitmap::from_bools(width, height, &bools);
+            let sz = 100i32;
+            let rects = greedy_merged_rects(&bmp, sz, sz, u16::MAX);
+            let total: i64 = rects.iter().map(|r| r.area() / (sz as i64 * sz as i64)).sum();
+            prop_assert_eq!(total as usize, expected_on);
+        }
+
+        #[test]
+        fn histogram_merge_preserves_area(
+            width in 1u32..32, height in 1u32..32,
+            seed in prop::collection::vec(any::<bool>(), 1..1025)
+        ) {
+            let n = (width * height) as usize;
+            let bools: Vec<bool> = seed.iter().cycle().take(n).copied().collect();
+            let expected_on = bools.iter().filter(|&&b| b).count();
+            let bmp = ArtworkBitmap::from_bools(width, height, &bools);
+            let sz = 100i32;
+            let rects = histogram_merged_rects(&bmp, sz, sz, u16::MAX);
+            let total: i64 = rects.iter().map(|r| r.area() / (sz as i64 * sz as i64)).sum();
+            prop_assert_eq!(total as usize, expected_on);
+        }
     }
 }

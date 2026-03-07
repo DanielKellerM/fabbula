@@ -7,15 +7,15 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
 use fabbula::artwork::{
-    ArtworkBitmap, ThresholdMode, apply_exclusion_mask, enforce_density, enforce_density_region,
-    load_artwork,
+    ArtworkBitmap, DitherMode, ThresholdMode, apply_exclusion_mask, load_artwork,
 };
 use fabbula::color::{LayerBitmap, extract_channels, extract_palette};
-use fabbula::drc::{DrcRule, check_density_only, check_drc, report_drc};
+use fabbula::drc::{check_drc, report_drc};
 use fabbula::gdsio::{LayerRects, merge_into_gds_multi, read_existing_metal, write_gds_multi};
+use fabbula::generation::generate_layer_polygons;
 use fabbula::lef::{LefLayer, write_lef_multi};
 use fabbula::pdk::{ArtworkLayerProfile, DrcRules, PdkConfig};
-use fabbula::polygon::{PolygonStrategy, Rect, bounding_box, generate_polygons};
+use fabbula::polygon::{PixelPlacement, PolygonStrategy, Rect, bounding_box};
 use fabbula::preview::{
     DEFAULT_LAYER_COLORS, HtmlLayer, SvgLayer, write_deep_zoom_preview, write_html_preview_multi,
     write_svg_multi,
@@ -268,33 +268,9 @@ impl From<StrategyArg> for PolygonStrategy {
     }
 }
 
-/// Build a DRC rule set with the most conservative (largest) values across all profiles.
-/// This ensures all layers use the same pixel pitch and align spatially in multi-layer mode.
 fn most_conservative_drc(profiles: &[ArtworkLayerProfile]) -> DrcRules {
-    let mut drc = profiles[0].drc.clone();
-    for p in &profiles[1..] {
-        drc.min_width = drc.min_width.max(p.drc.min_width);
-        drc.min_spacing = drc.min_spacing.max(p.drc.min_spacing);
-        drc.min_area = drc.min_area.max(p.drc.min_area);
-        // Take the smallest max_width (most restrictive)
-        match (drc.max_width, p.drc.max_width) {
-            (Some(a), Some(b)) => drc.max_width = Some(a.min(b)),
-            (None, Some(b)) => drc.max_width = Some(b),
-            _ => {}
-        }
-        // Take the largest wide_metal values (most conservative)
-        match (drc.wide_metal_threshold, p.drc.wide_metal_threshold) {
-            (Some(a), Some(b)) => drc.wide_metal_threshold = Some(a.min(b)),
-            (None, Some(b)) => drc.wide_metal_threshold = Some(b),
-            _ => {}
-        }
-        match (drc.wide_metal_spacing, p.drc.wide_metal_spacing) {
-            (Some(a), Some(b)) => drc.wide_metal_spacing = Some(a.max(b)),
-            (None, Some(b)) => drc.wide_metal_spacing = Some(b),
-            _ => {}
-        }
-    }
-    drc
+    let rules: Vec<_> = profiles.iter().map(|p| p.drc.clone()).collect();
+    DrcRules::most_conservative(&rules)
 }
 
 fn load_pdk(name_or_path: &str) -> Result<PdkConfig> {
@@ -365,7 +341,7 @@ fn prepare_bitmap(
     max_width: Option<u32>,
     max_height: Option<u32>,
     invert: bool,
-    dither: bool,
+    dither: DitherMode,
 ) -> Result<ArtworkBitmap> {
     let thresh = parse_threshold(threshold)?;
     let max_px = match (max_width, max_height) {
@@ -393,148 +369,6 @@ fn parse_layer_spec(s: &str) -> Result<(i16, i16)> {
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid datatype in exclusion-layer"))?;
     Ok((layer, datatype))
-}
-
-/// Generate polygons with a closed-loop density enforcement.
-///
-/// After the initial bitmap-level density pre-pass, generates polygons and checks
-/// for density violations. If any are found, maps the violating window back to
-/// bitmap pixel coordinates and applies targeted density enforcement, then retries.
-/// This closes the gap between bitmap-level density (pixel space) and DRC density
-/// (physical merged rectangles).
-fn generate_with_density_loop(
-    bitmap: &mut ArtworkBitmap,
-    pdk: &PdkConfig,
-    drc_rules: &DrcRules,
-    strategy: PolygonStrategy,
-    touching: bool,
-    max_retries: u32,
-) -> Result<Vec<Rect>> {
-    let min_w_um = pdk.snap_to_grid(drc_rules.min_width);
-    let eff_s_um = pdk.snap_to_grid(drc_rules.effective_spacing());
-    let pitch_um = if touching {
-        min_w_um
-    } else {
-        min_w_um + eff_s_um
-    };
-    let pitch_dbu = pdk.um_to_dbu(pitch_um);
-
-    let mut best_rects = generate_polygons(bitmap, pdk, drc_rules, strategy, touching)?;
-
-    if drc_rules.density_max >= 1.0 {
-        return Ok(best_rects);
-    }
-
-    for attempt in 0..max_retries {
-        let violations =
-            check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, Some(1));
-        if violations.is_empty() {
-            return Ok(best_rects);
-        }
-
-        let density_violations =
-            check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, None);
-        let mut total_cleared = 0usize;
-
-        for v in &density_violations {
-            if v.rule != DrcRule::DensityMax {
-                continue;
-            }
-            let (wx_dbu, wy_dbu) = v.location;
-            let window_dbu = pdk.um_to_dbu(drc_rules.density_window_um);
-
-            let px_start = (wx_dbu / pitch_dbu).max(0) as u32;
-            let px_end_dbu = wx_dbu + window_dbu;
-            let px_end = ((px_end_dbu + pitch_dbu - 1) / pitch_dbu).max(0) as u32;
-
-            let py_end_phys = wy_dbu;
-            let py_start_phys = wy_dbu + window_dbu;
-            let bh = bitmap.height as i32;
-            let py_start = (bh - 1 - (py_start_phys / pitch_dbu)).max(0) as u32;
-            let py_end = (bh - (py_end_phys / pitch_dbu)).max(0) as u32;
-
-            let rw = px_end.saturating_sub(px_start).min(bitmap.width - px_start);
-            let rh = py_end
-                .saturating_sub(py_start)
-                .min(bitmap.height - py_start);
-
-            if rw > 0 && rh > 0 {
-                let tight_max = drc_rules.density_max * 0.95;
-                total_cleared +=
-                    enforce_density_region(bitmap, tight_max, px_start, py_start, rw, rh);
-            }
-        }
-
-        if total_cleared == 0 {
-            tracing::warn!(
-                "Density loop attempt {}: no pixels could be cleared, stopping",
-                attempt + 1
-            );
-            break;
-        }
-
-        tracing::info!(
-            "Density loop attempt {}: cleared {} pixels, regenerating polygons",
-            attempt + 1,
-            total_cleared
-        );
-
-        best_rects = generate_polygons(bitmap, pdk, drc_rules, strategy, touching)?;
-    }
-
-    let final_violations =
-        check_density_only(&best_rects, pdk.pdk.db_units_per_um, drc_rules, Some(1));
-    if !final_violations.is_empty() {
-        tracing::warn!(
-            "Density loop exhausted {} retries with violations remaining",
-            max_retries
-        );
-    }
-
-    Ok(best_rects)
-}
-
-/// Run density pre-pass enforcement for a given DRC rule set.
-fn density_prepass(bitmap: &mut ArtworkBitmap, pdk: &PdkConfig, drc: &DrcRules, touching: bool) {
-    let min_w_um = pdk.snap_to_grid(drc.min_width);
-    let eff_s_um = pdk.snap_to_grid(drc.effective_spacing());
-    let pitch_um = if touching {
-        min_w_um
-    } else {
-        min_w_um + eff_s_um
-    };
-    let window_px = (drc.density_window_um / pitch_um).floor() as u32;
-    if window_px == 0 {
-        tracing::warn!(
-            "Density window ({:.1} um) is smaller than pixel pitch ({:.1} um), \
-             skipping density enforcement",
-            drc.density_window_um,
-            pitch_um
-        );
-    }
-    if window_px > 0 {
-        let cleared = enforce_density(bitmap, drc.density_max, window_px);
-        if cleared > 0 {
-            tracing::info!("Density enforcement: cleared {} pixels", cleared);
-        }
-    }
-}
-
-/// Generate polygons for a single layer with optional density enforcement.
-fn generate_layer_polygons(
-    bitmap: &mut ArtworkBitmap,
-    pdk: &PdkConfig,
-    drc: &DrcRules,
-    strategy: PolygonStrategy,
-    touching: bool,
-    density_enforce: bool,
-) -> Result<Vec<Rect>> {
-    if density_enforce && drc.density_max < 1.0 {
-        density_prepass(bitmap, pdk, drc, touching);
-        generate_with_density_loop(bitmap, pdk, drc, strategy, touching, 3)
-    } else {
-        generate_polygons(bitmap, pdk, drc, strategy, touching)
-    }
 }
 
 fn report_bounds(layer_results: &[(Vec<Rect>, &ArtworkLayerProfile)], pdk: &PdkConfig) {
@@ -596,7 +430,16 @@ fn main() -> Result<()> {
         } => {
             let pdk = load_pdk(&pdk)?;
             let strategy: PolygonStrategy = strategy.into();
-            let touching = !separated;
+            let placement = if separated {
+                PixelPlacement::Separated
+            } else {
+                PixelPlacement::Touching
+            };
+            let dither_mode = if dither {
+                DitherMode::FloydSteinberg
+            } else {
+                DitherMode::Off
+            };
             let density_enforce = !no_density_enforce;
             let profiles = pdk.layer_profiles();
             // For size_um, use the DRC rules that will actually be used for generation
@@ -605,7 +448,8 @@ fn main() -> Result<()> {
                 ColorModeArg::Channel | ColorModeArg::Palette => most_conservative_drc(&profiles),
             };
             let (max_width, max_height) = if let Some(ref size_str) = size_um {
-                let (pw, ph) = parse_size_um(size_str, &pdk, &size_um_drc, touching)?;
+                let (pw, ph) =
+                    parse_size_um(size_str, &pdk, &size_um_drc, placement.is_touching())?;
                 (
                     Some(max_width.unwrap_or(pw).min(pw)),
                     Some(max_height.unwrap_or(ph).min(ph)),
@@ -626,8 +470,14 @@ fn main() -> Result<()> {
 
             match color_mode {
                 ColorModeArg::Single => {
-                    let mut bitmap =
-                        prepare_bitmap(&input, &threshold, max_width, max_height, invert, dither)?;
+                    let mut bitmap = prepare_bitmap(
+                        &input,
+                        &threshold,
+                        max_width,
+                        max_height,
+                        invert,
+                        dither_mode,
+                    )?;
                     tracing::info!(
                         "Bitmap: {}x{}, density: {:.1}%",
                         bitmap.width,
@@ -640,7 +490,7 @@ fn main() -> Result<()> {
                         &pdk,
                         &profile.drc,
                         strategy,
-                        touching,
+                        placement,
                         density_enforce,
                     )?;
                     layer_results.push((rects, profile));
@@ -663,7 +513,7 @@ fn main() -> Result<()> {
                             &pdk,
                             &shared_drc,
                             strategy,
-                            touching,
+                            placement,
                             density_enforce,
                         )?;
                         layer_results.push((rects, profile));
@@ -695,7 +545,7 @@ fn main() -> Result<()> {
                             &pdk,
                             &shared_drc,
                             strategy,
-                            touching,
+                            placement,
                             density_enforce,
                         )?;
                         layer_results.push((rects, profile));
@@ -835,7 +685,16 @@ fn main() -> Result<()> {
         } => {
             let pdk = load_pdk(&pdk)?;
             let strategy: PolygonStrategy = strategy.into();
-            let touching = !separated;
+            let placement = if separated {
+                PixelPlacement::Separated
+            } else {
+                PixelPlacement::Touching
+            };
+            let dither_mode = if dither {
+                DitherMode::FloydSteinberg
+            } else {
+                DitherMode::Off
+            };
             let density_enforce = !no_density_enforce;
             let profiles = pdk.layer_profiles();
             let size_um_drc = match color_mode {
@@ -843,7 +702,8 @@ fn main() -> Result<()> {
                 ColorModeArg::Channel | ColorModeArg::Palette => most_conservative_drc(&profiles),
             };
             let (max_width, max_height) = if let Some(ref size_str) = size_um {
-                let (pw, ph) = parse_size_um(size_str, &pdk, &size_um_drc, touching)?;
+                let (pw, ph) =
+                    parse_size_um(size_str, &pdk, &size_um_drc, placement.is_touching())?;
                 (
                     Some(max_width.unwrap_or(pw).min(pw)),
                     Some(max_height.unwrap_or(ph).min(ph)),
@@ -880,8 +740,14 @@ fn main() -> Result<()> {
 
             match color_mode {
                 ColorModeArg::Single => {
-                    let mut bitmap =
-                        prepare_bitmap(&input, &threshold, max_width, max_height, invert, dither)?;
+                    let mut bitmap = prepare_bitmap(
+                        &input,
+                        &threshold,
+                        max_width,
+                        max_height,
+                        invert,
+                        dither_mode,
+                    )?;
 
                     if let (Some(margin_um), Some(existing)) = (exclusion_margin, &exclusion_metal)
                     {
@@ -895,7 +761,7 @@ fn main() -> Result<()> {
                         &pdk,
                         &profile.drc,
                         strategy,
-                        touching,
+                        placement,
                         density_enforce,
                     )?;
                     layer_results.push((rects, profile));
@@ -923,7 +789,7 @@ fn main() -> Result<()> {
                             &pdk,
                             &shared_drc,
                             strategy,
-                            touching,
+                            placement,
                             density_enforce,
                         )?;
                         layer_results.push((rects, profile));
@@ -960,7 +826,7 @@ fn main() -> Result<()> {
                             &pdk,
                             &shared_drc,
                             strategy,
-                            touching,
+                            placement,
                             density_enforce,
                         )?;
                         layer_results.push((rects, profile));
@@ -1009,7 +875,8 @@ fn main() -> Result<()> {
 
         Commands::ListPdks => {
             println!("Built-in PDK configurations:");
-            for name in PdkConfig::list_builtins() {
+            for builtin in PdkConfig::list_builtins() {
+                let name = builtin.name();
                 let Ok(pdk) = PdkConfig::builtin(name) else {
                     println!("  {:<15} (failed to load)", name);
                     continue;

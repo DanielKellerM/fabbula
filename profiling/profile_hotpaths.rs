@@ -4,7 +4,7 @@
 use fabbula::artwork::ArtworkBitmap;
 use fabbula::drc::{check_density_only, check_drc};
 use fabbula::pdk::PdkConfig;
-use fabbula::polygon::{PolygonStrategy, generate_polygons};
+use fabbula::polygon::{PixelPlacement, PolygonStrategy, generate_polygons};
 
 fn dense_pattern(size: u32) -> ArtworkBitmap {
     let bools: Vec<bool> = (0..size * size)
@@ -25,9 +25,14 @@ fn main() {
         let bmp = dense_pattern(size);
         eprintln!("GreedyMerge {size}x{size}...");
         for _ in 0..3 {
-            let rects =
-                generate_polygons(&bmp, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false)
-                    .unwrap();
+            let rects = generate_polygons(
+                &bmp,
+                &pdk,
+                &pdk.drc,
+                PolygonStrategy::GreedyMerge,
+                PixelPlacement::Separated,
+            )
+            .unwrap();
             std::hint::black_box(&rects);
         }
     }
@@ -35,8 +40,14 @@ fn main() {
     // DRC at scale
     eprintln!("DRC 50k rects...");
     let bmp = dense_pattern(512);
-    let rects =
-        generate_polygons(&bmp, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false).unwrap();
+    let rects = generate_polygons(
+        &bmp,
+        &pdk,
+        &pdk.drc,
+        PolygonStrategy::GreedyMerge,
+        PixelPlacement::Separated,
+    )
+    .unwrap();
     for _ in 0..5 {
         let v = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
         std::hint::black_box(&v);

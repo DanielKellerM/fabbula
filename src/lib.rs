@@ -24,15 +24,15 @@
 //!
 //! ```no_run
 //! use fabbula::pdk::PdkConfig;
-//! use fabbula::artwork::{load_artwork, ThresholdMode};
-//! use fabbula::polygon::{generate_polygons, PolygonStrategy};
+//! use fabbula::artwork::{load_artwork, ThresholdMode, DitherMode};
+//! use fabbula::polygon::{generate_polygons, PolygonStrategy, PixelPlacement};
 //! use fabbula::drc::{check_drc, report_drc};
 //! use fabbula::gdsio::write_gds;
 //! use std::path::Path;
 //!
 //! let pdk = PdkConfig::builtin("sky130").unwrap();
-//! let bitmap = load_artwork(Path::new("logo.png"), ThresholdMode::Otsu, None, false).unwrap();
-//! let rects = generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, false).unwrap();
+//! let bitmap = load_artwork(Path::new("logo.png"), ThresholdMode::Otsu, None, DitherMode::Off).unwrap();
+//! let rects = generate_polygons(&bitmap, &pdk, &pdk.drc, PolygonStrategy::GreedyMerge, PixelPlacement::Separated).unwrap();
 //! let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
 //! report_drc(&violations);
 //! write_gds(&rects, &pdk, "artwork", Path::new("output.gds")).unwrap();
@@ -54,6 +54,7 @@ pub mod artwork;
 pub mod color;
 pub mod drc;
 pub mod gdsio;
+pub mod generation;
 pub mod lef;
 pub mod pdk;
 pub mod polygon;
@@ -61,7 +62,7 @@ pub mod preview;
 pub mod tiles;
 
 // Re-export key types for convenient library usage
-pub use artwork::{ArtworkBitmap, ThresholdMode};
+pub use artwork::{ArtworkBitmap, DitherMode, ThresholdMode};
 pub use drc::{DrcRule, DrcViolation};
-pub use pdk::{DrcRules, PdkConfig};
-pub use polygon::{PolygonStrategy, Rect};
+pub use pdk::{BuiltinPdk, DrcRules, LayerVariant, PdkConfig};
+pub use polygon::{PixelPlacement, Point, PolygonStrategy, Rect};

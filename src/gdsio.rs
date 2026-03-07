@@ -990,4 +990,52 @@ mod tests {
             rects.len()
         );
     }
+
+    #[test]
+    fn test_load_gds_nonexistent_path() {
+        let result = load_gds(Path::new("/nonexistent/file.gds"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_gds_invalid_content() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::with_suffix(".gds").unwrap();
+        tmp.write_all(b"not a real gds file with random bytes")
+            .unwrap();
+        let result = load_gds(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_existing_metal_nonexistent() {
+        let pdk = crate::pdk::PdkConfig::builtin("sky130").unwrap();
+        let result = read_existing_metal(Path::new("/nonexistent.gds"), &pdk, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_existing_metal_missing_cell() {
+        let pdk = crate::pdk::PdkConfig::builtin("sky130").unwrap();
+        let rects = vec![Rect::new(0, 0, 1000, 1000)];
+        let dir = tempfile::tempdir().unwrap();
+        let gds_path = dir.path().join("test.gds");
+        write_gds(&rects, &pdk, "artwork", &gds_path).unwrap();
+
+        let result = read_existing_metal(&gds_path, &pdk, Some("nonexistent_cell"), None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found in GDS"));
+    }
+
+    #[test]
+    fn test_write_and_read_back_empty_gds() {
+        let pdk = crate::pdk::PdkConfig::builtin("sky130").unwrap();
+        let rects: Vec<Rect> = vec![];
+        let dir = tempfile::tempdir().unwrap();
+        let gds_path = dir.path().join("empty.gds");
+        write_gds(&rects, &pdk, "empty_cell", &gds_path).unwrap();
+
+        let result = read_existing_metal(&gds_path, &pdk, Some("empty_cell"), None).unwrap();
+        assert!(result.is_empty());
+    }
 }

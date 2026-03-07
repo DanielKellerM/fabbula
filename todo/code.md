@@ -20,32 +20,26 @@
   - Also consider `Micrometers(f64)` for PDK-facing values
   - Files: `src/polygon.rs`, `src/drc.rs`, `src/pdk.rs`
 
-- [ ] **P1** Create PDK name enum instead of stringly-typed `&str`
-  - PDK names are raw strings throughout (`main.rs:73`, `pdk.rs:155-166`)
-  - No validation until runtime dispatch in `PdkConfig::load()`
-  - An enum (`Sky130`, `IhpSg13g2`, `Gf180mcu`, etc.) catches typos at compile time
+- [x] **P1** Create PDK name enum instead of stringly-typed `&str`
+  - Added `BuiltinPdk` enum with `FromStr`, `Display`, `name()`, `toml_content()`, `all()`
+  - `PdkConfig::builtin()` and `list_builtins()` use the enum internally
   - Files: `src/pdk.rs`, `src/main.rs`
 
-- [ ] **P1** Normalize coordinate system handling
-  - Y-axis flipping happens ad-hoc in multiple places with no consistent abstraction
-  - `polygon.rs:184`: `bitmap.height - 1 - y` (artwork to layout)
-  - `tiles.rs:104`: `bb.y1 - rect.y1` (layout to screen)
-  - Risk of subtle bugs when adding new output formats or features
-  - Consider helper functions or a `CoordSystem` enum with conversion methods
-  - Files: `src/polygon.rs`, `src/preview.rs`, `src/tiles.rs`
+- [x] **P1** Normalize coordinate system handling
+  - Added `image_y_to_layout()` helper in polygon.rs, replaced 3 ad-hoc Y-flip expressions
+  - Files: `src/polygon.rs`
 
-- [ ] **P2** Replace `bool` parameters with enums
-  - `touching: bool` in `main.rs:304,394,482,505` and `polygon.rs:108` - should be `PixelPlacement::Touching/Separated`
-  - `dither: bool` in `artwork.rs:275` - should be `DitherMode::Enabled/Disabled`
-  - `use_alt: bool` in `pdk.rs:188` - should be `DrcLayerVariant::Primary/Alternative`
-  - Enums are self-documenting and prevent argument-order bugs
-  - Files: `src/main.rs`, `src/polygon.rs`, `src/artwork.rs`, `src/pdk.rs`
+- [x] **P2** Replace `bool` parameters with enums
+  - `PixelPlacement::Touching/Separated` in polygon.rs/generation.rs/main.rs
+  - `DitherMode::Off/FloydSteinberg` in artwork.rs/main.rs
+  - `LayerVariant::Primary/Alternative` in pdk.rs
+  - Files: `src/polygon.rs`, `src/artwork.rs`, `src/pdk.rs`, `src/main.rs`
 
-- [ ] **P2** Add `Point` newtype for `(i32, i32)` location tuples
-  - `DrcViolation.location` is `(i32, i32)` - no semantic meaning
-  - `Transform.apply()` returns `(i32, i32)` - same issue
-  - A `Point { x: i32, y: i32 }` struct would improve readability
-  - Files: `src/drc.rs`, `src/gdsio.rs`
+- [x] **P2** Add `Point` newtype for `(i32, i32)` location tuples
+  - Added `Point { x: i32, y: i32 }` in polygon.rs with `Display` impl
+  - `DrcViolation.location` now uses `Point` instead of `(i32, i32)`
+  - Re-exported in lib.rs
+  - Files: `src/polygon.rs`, `src/drc.rs`, `src/lib.rs`
 
 ## Error Handling
 
@@ -91,22 +85,17 @@
 - [x] **P2** Add `#[inline]` to `Rect::new()`
   - Added `#[inline]` attribute
 
-- [ ] **P2** Pre-allocate density enforcement vectors
-  - `artwork.rs:584`: `violations` Vec grows during window scan - could estimate capacity
-  - `artwork.rs:617`: `candidates` Vec inside inner loop - could pre-allocate `win*win`
-  - Reduces reallocations in density enforcement, estimated 5-10% speedup for dense images
+- [x] **P2** Pre-allocate density enforcement vectors
+  - Pre-allocated `violations` Vec with capacity estimate, hoisted `candidates` Vec with `with_capacity(win*win)` and `.clear()`
   - Files: `src/artwork.rs`
 
-- [ ] **P2** Parallelize k-means clustering in `color.rs`
-  - K-means centroid update loop (`color.rs:271`) doesn't use rayon
-  - Polygon generation and DRC already use `par_iter()` extensively
-  - Large images in palette mode could benefit from parallel pixel assignment
+- [x] **P2** Parallelize k-means clustering in `color.rs`
+  - Parallel pixel assignment and centroid accumulation via `par_iter`/`par_chunks` + reduce (above 100K pixels)
   - Files: `src/color.rs`
 
-- [ ] **P2** Avoid full pixel Vec allocation in palette extraction
-  - `color.rs:150-153`: collects all pixels into `Vec<[f32; 3]>` before k-means
-  - For large images this is a significant allocation
-  - Consider iterator-based k-means or chunked processing
+- [x] **P2** Avoid full pixel Vec allocation in palette extraction
+  - Subsample pixels for k-means training (every Nth pixel, target 50K samples)
+  - Final assignment done directly from image iterator for small images, parallel for large
   - Files: `src/color.rs`
 
 ## Idiomatic Rust
@@ -117,24 +106,22 @@
 - [x] **P2** Use `reduce()` in `bounding_box()`
   - Updated both `bounding_box()` and `bounding_box_refs()` in `polygon.rs`
 
-- [ ] **P2** Move `most_conservative_drc()` to `DrcRules` impl
-  - Currently a free function in `main.rs` operating on `&[ArtworkLayerProfile]`
-  - More idiomatic as `DrcRules::most_conservative(rules: &[DrcRules]) -> Self`
-  - Also avoids unnecessary clone of `profiles[0].drc`
-  - Files: `src/main.rs`, `src/pdk.rs` or `src/drc.rs`
+- [x] **P2** Move `most_conservative_drc()` to `DrcRules` impl
+  - Added `DrcRules::most_conservative(rules: &[DrcRules]) -> Self`
+  - `main.rs` thin wrapper calls the method
+  - Files: `src/pdk.rs`, `src/main.rs`
 
-- [ ] **P2** Move `validate_drc_rules()` to `DrcRules` impl
-  - `pdk.rs:234-288`: standalone function that validates a `&DrcRules`
-  - More idiomatic as `impl DrcRules { pub fn validate(&self) -> Result<()> }`
+- [x] **P2** Move `validate_drc_rules()` to `DrcRules` impl
+  - Added `DrcRules::validate(&self, section: &str) -> Result<()>`
+  - `PdkConfig::validate()` calls `self.drc.validate("drc")`
   - Files: `src/pdk.rs`
 
 ## Code Organization
 
-- [ ] **P2** Extract generation logic from `main.rs`
-  - `generate_with_density_loop()` (~90 lines), `density_prepass()`, `generate_layer_polygons()` contain business logic
-  - These are untestable without the CLI - should move to `src/generation.rs` or into existing modules
-  - `main.rs` is 1,022 lines; extracting would improve testability and readability
-  - Files: `src/main.rs`, `src/lib.rs`
+- [x] **P2** Extract generation logic from `main.rs`
+  - Moved `generate_with_density_loop()`, `density_prepass()`, `generate_layer_polygons()` to `src/generation.rs`
+  - Added `pub mod generation;` to lib.rs
+  - Files: `src/generation.rs`, `src/main.rs`, `src/lib.rs`
 
 - [x] **P2** Standardize derive macro ordering
   - Fixed `Transform` in `gdsio.rs` from `Clone, Debug` to `Debug, Clone`
@@ -151,24 +138,23 @@
     `test_single_pixel_bitmap`, `test_all_off_bitmap`, `test_single_row_bitmap`,
     `test_single_column_bitmap`, `test_rect_zero_area`, `test_drc_empty_rects`, `test_drc_single_rect`
 
-- [ ] **P2** Add tests for parallel merge strategy paths
-  - `greedy_merge_parallel_strips` only triggers at >= 800,000 pixels AND height > 256
-  - `histogram_merge_parallel_strips` has same threshold
-  - Current tests use small bitmaps (128x128) - parallel paths are never exercised
-  - Add ~1000x1000 bitmap tests to cover parallel code paths
+- [x] **P2** Add tests for parallel merge strategy paths
+  - Added `test_greedy_merge_parallel_path` and `test_histogram_merge_parallel_path` with 1000x1000 bitmaps
+  - Verifies both serial and parallel code paths (>= 800K pixels, height > 256)
   - Files: `src/polygon.rs`
 
-- [ ] **P2** Add error path tests for file I/O
-  - No tests for corrupted GDS files, truncated .gz input, or unwritable output paths
-  - `load_gds` with a non-GDS file should return a clear error
+- [x] **P2** Add error path tests for file I/O
+  - Added: `test_load_gds_nonexistent_path`, `test_load_gds_invalid_content`,
+    `test_read_existing_metal_nonexistent`, `test_read_existing_metal_missing_cell`,
+    `test_write_and_read_back_empty_gds`
   - Files: `src/gdsio.rs`
 
 - [x] **P2** Add DRC early-exit edge case tests
   - Added: `test_capped_with_zero`, `test_capped_with_one`, `test_capped_exceeding_total`,
     `test_density_only_empty_rects`
 
-- [ ] **P2** Add property-based tests
-  - All tests are hand-written unit/integration examples
-  - Bitmap manipulations, SAT, histogram merge are good candidates for proptest/quickcheck
-  - Could catch subtle edge cases in coordinate arithmetic and merge algorithms
-  - Files: `src/polygon.rs`, `src/artwork.rs`, `Cargo.toml`
+- [x] **P2** Add property-based tests
+  - Added proptest module with 5 properties: `rect_new_normalizes`, `bounding_box_contains_all`,
+    `pixel_rects_covers_all_on_pixels`, `row_merge_preserves_pixel_count`,
+    `greedy_merge_preserves_area`, `histogram_merge_preserves_area`
+  - Files: `src/polygon.rs`, `Cargo.toml`

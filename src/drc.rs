@@ -8,7 +8,7 @@
 //! minimum spacing, wide-metal spacing, minimum area, and metal density.
 
 use crate::pdk::{DrcRules, um_to_dbu};
-use crate::polygon::{Rect, bounding_box};
+use crate::polygon::{Point, Rect, bounding_box};
 use rayon::prelude::*;
 use rstar::{AABB, RTree, RTreeObject};
 
@@ -49,7 +49,7 @@ pub struct DrcViolation {
     pub other_index: u32,
     pub value: i64,
     pub limit: i64,
-    pub location: (i32, i32),
+    pub location: Point,
 }
 
 impl std::fmt::Display for DrcViolation {
@@ -85,16 +85,16 @@ impl std::fmt::Display for DrcViolation {
                 "Density {:.1}% exceeds max {:.1}% at ({}, {})",
                 self.value as f64 / 10.0,
                 self.limit as f64 / 10.0,
-                self.location.0,
-                self.location.1
+                self.location.x,
+                self.location.y
             ),
             DrcRule::DensityMin => write!(
                 f,
                 "Density {:.1}% below min {:.1}% at ({}, {})",
                 self.value as f64 / 10.0,
                 self.limit as f64 / 10.0,
-                self.location.0,
-                self.location.1
+                self.location.x,
+                self.location.y
             ),
         }
     }
@@ -209,7 +209,7 @@ pub fn check_drc_capped(
             .enumerate()
             .flat_map_iter(|(i, r)| {
                 let idx = i as u32;
-                let loc = (r.x0, r.y0);
+                let loc = Point::new(r.x0, r.y0);
                 let width_v = (r.width() < min_w_dbu).then(|| DrcViolation {
                     rule: DrcRule::MinWidth,
                     rect_index: idx,
@@ -259,7 +259,7 @@ pub fn check_drc_capped(
                 return violations;
             }
             let idx = i as u32;
-            let loc = (r.x0, r.y0);
+            let loc = Point::new(r.x0, r.y0);
             if r.width() < min_w_dbu {
                 violations.push(DrcViolation {
                     rule: DrcRule::MinWidth,
@@ -349,7 +349,7 @@ pub fn check_drc_capped(
                             other_index: neighbor.index,
                             value: dist as i64,
                             limit: effective_spacing as i64,
-                            location: (r.x0, r.y0),
+                            location: Point::new(r.x0, r.y0),
                         })
                     })
             })
@@ -392,7 +392,7 @@ pub fn check_drc_capped(
                         other_index: neighbor.index,
                         value: dist as i64,
                         limit: effective_spacing as i64,
-                        location: (r.x0, r.y0),
+                        location: Point::new(r.x0, r.y0),
                     });
                 }
             }
@@ -529,7 +529,7 @@ fn check_density(
                     other_index: 0,
                     value: metal_area * 1000 / window_area_i64,
                     limit: density_max_permille,
-                    location: (wx, wy),
+                    location: Point::new(wx, wy),
                 });
                 let min_v = (min_metal > 0 && metal_area < min_metal).then(|| DrcViolation {
                     rule: DrcRule::DensityMin,
@@ -537,7 +537,7 @@ fn check_density(
                     other_index: 0,
                     value: metal_area * 1000 / window_area_i64,
                     limit: density_min_permille,
-                    location: (wx, wy),
+                    location: Point::new(wx, wy),
                 });
                 max_v.into_iter().chain(min_v)
             })
@@ -569,7 +569,7 @@ fn check_density(
                         other_index: 0,
                         value: density_permille,
                         limit: density_max_permille,
-                        location: (wx, wy),
+                        location: Point::new(wx, wy),
                     });
                 }
                 if min_metal > 0 && metal_area < min_metal {
@@ -580,7 +580,7 @@ fn check_density(
                         other_index: 0,
                         value: density_permille,
                         limit: density_min_permille,
-                        location: (wx, wy),
+                        location: Point::new(wx, wy),
                     });
                 }
                 wy += step;
