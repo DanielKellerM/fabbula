@@ -1,4 +1,4 @@
-name: Rust
+name: CI
 
 on:
   push:
@@ -14,7 +14,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+
   build:
+    needs: lint
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -27,6 +31,7 @@ jobs:
         run: cargo test --verbose
 
   coverage:
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +47,7 @@ jobs:
           --summary-only
 
   audit:
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
