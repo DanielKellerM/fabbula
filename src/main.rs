@@ -2,10 +2,11 @@
 // Licensed under the Apache License, Version 2.0.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
+use fabbula::OverlayPosition;
 use fabbula::artwork::{
     ArtworkBitmap, DitherMode, ThresholdMode, apply_exclusion_mask, load_artwork,
 };
@@ -20,6 +21,8 @@ use fabbula::preview::{
     DEFAULT_LAYER_COLORS, HtmlLayer, SvgLayer, write_deep_zoom_preview, write_html_preview_multi,
     write_svg_multi,
 };
+use fabbula::qr::{EcLevel, render_qr};
+use fabbula::text::render_text;
 use fabbula::tiles::{TileConfig, TileLayer, generate_tile_pyramid, parse_hex_color};
 
 #[derive(Parser)]
@@ -164,6 +167,42 @@ enum Commands {
         /// Max resolution for deep zoom tile pyramid in pixels (default 4096)
         #[arg(long, default_value = "4096")]
         tile_resolution: u32,
+
+        /// Overlay text (inline, supports \n)
+        #[arg(long)]
+        text: Option<String>,
+
+        /// Overlay text from file (preserves line breaks)
+        #[arg(long)]
+        text_file: Option<PathBuf>,
+
+        /// Text overlay placement
+        #[arg(long, value_enum, default_value = "bottom")]
+        text_position: OverlayPosition,
+
+        /// Text font scale
+        #[arg(long, default_value = "1")]
+        text_scale: u32,
+
+        /// Overlay QR data
+        #[arg(long)]
+        qr: Option<String>,
+
+        /// QR overlay placement
+        #[arg(long, value_enum, default_value = "bottom-right")]
+        qr_position: OverlayPosition,
+
+        /// QR module size in pixels
+        #[arg(long, default_value = "2")]
+        qr_module_size: u32,
+
+        /// QR error correction level
+        #[arg(long, value_enum, default_value = "m")]
+        qr_ec_level: EcLevel,
+
+        /// Overlay margin in pixels
+        #[arg(long, default_value = "2")]
+        overlay_margin: u32,
     },
 
     /// Merge artwork into an existing GDSII chip file
@@ -263,6 +302,186 @@ enum Commands {
         /// Number of palette colors (for palette mode)
         #[arg(long)]
         num_colors: Option<usize>,
+
+        /// Overlay text (inline, supports \n)
+        #[arg(long)]
+        text: Option<String>,
+
+        /// Overlay text from file (preserves line breaks)
+        #[arg(long)]
+        text_file: Option<PathBuf>,
+
+        /// Text overlay placement
+        #[arg(long, value_enum, default_value = "bottom")]
+        text_position: OverlayPosition,
+
+        /// Text font scale
+        #[arg(long, default_value = "1")]
+        text_scale: u32,
+
+        /// Overlay QR data
+        #[arg(long)]
+        qr: Option<String>,
+
+        /// QR overlay placement
+        #[arg(long, value_enum, default_value = "bottom-right")]
+        qr_position: OverlayPosition,
+
+        /// QR module size in pixels
+        #[arg(long, default_value = "2")]
+        qr_module_size: u32,
+
+        /// QR error correction level
+        #[arg(long, value_enum, default_value = "m")]
+        qr_ec_level: EcLevel,
+
+        /// Overlay margin in pixels
+        #[arg(long, default_value = "2")]
+        overlay_margin: u32,
+    },
+
+    /// Render text directly to standalone output formats
+    Text {
+        /// Inline text (mutually exclusive with --text-file)
+        text: Option<String>,
+
+        /// Read text from file
+        #[arg(long)]
+        text_file: Option<PathBuf>,
+
+        /// Output GDSII file
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// PDK name or path
+        #[arg(short, long)]
+        pdk: String,
+
+        /// Cell name in the output GDS
+        #[arg(long, default_value = "artwork")]
+        cell_name: String,
+
+        /// GDS library name (default: "fabbula")
+        #[arg(long, default_value = "fabbula")]
+        library_name: String,
+
+        /// Polygon merging strategy
+        #[arg(long, default_value = "greedy-merge", value_enum)]
+        strategy: StrategyArg,
+
+        /// Use separated mode with guaranteed spacing between all pixels
+        #[arg(long)]
+        separated: bool,
+
+        /// Invert the rendered text bitmap
+        #[arg(long)]
+        invert: bool,
+
+        /// Output SVG preview file
+        #[arg(long)]
+        svg: Option<PathBuf>,
+
+        /// Output interactive HTML preview file
+        #[arg(long)]
+        html: Option<PathBuf>,
+
+        /// Output LEF macro file
+        #[arg(long)]
+        lef: Option<PathBuf>,
+
+        /// Skip DRC check on output
+        #[arg(long)]
+        no_check_drc: bool,
+
+        /// Disable automatic density enforcement
+        #[arg(long)]
+        no_density_enforce: bool,
+
+        /// Continue despite density enforcement failures
+        #[arg(long)]
+        force: bool,
+
+        /// Font scale
+        #[arg(long, default_value = "1")]
+        font_scale: u32,
+
+        /// Character spacing in pixels
+        #[arg(long, default_value = "0")]
+        char_spacing: u32,
+
+        /// Extra line spacing in pixels
+        #[arg(long, default_value = "2")]
+        line_spacing: u32,
+    },
+
+    /// Render a QR code directly to standalone output formats
+    Qr {
+        /// QR payload data
+        data: String,
+
+        /// Output GDSII file
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// PDK name or path
+        #[arg(short, long)]
+        pdk: String,
+
+        /// Cell name in the output GDS
+        #[arg(long, default_value = "artwork")]
+        cell_name: String,
+
+        /// GDS library name (default: "fabbula")
+        #[arg(long, default_value = "fabbula")]
+        library_name: String,
+
+        /// Polygon merging strategy
+        #[arg(long, default_value = "greedy-merge", value_enum)]
+        strategy: StrategyArg,
+
+        /// Use separated mode with guaranteed spacing between all pixels
+        #[arg(long)]
+        separated: bool,
+
+        /// Invert the QR bitmap
+        #[arg(long)]
+        invert: bool,
+
+        /// Output SVG preview file
+        #[arg(long)]
+        svg: Option<PathBuf>,
+
+        /// Output interactive HTML preview file
+        #[arg(long)]
+        html: Option<PathBuf>,
+
+        /// Output LEF macro file
+        #[arg(long)]
+        lef: Option<PathBuf>,
+
+        /// Skip DRC check on output
+        #[arg(long)]
+        no_check_drc: bool,
+
+        /// Disable automatic density enforcement
+        #[arg(long)]
+        no_density_enforce: bool,
+
+        /// Continue despite density enforcement failures
+        #[arg(long)]
+        force: bool,
+
+        /// QR module size in pixels
+        #[arg(long, default_value = "3")]
+        module_size: u32,
+
+        /// QR error correction level
+        #[arg(long, value_enum, default_value = "m")]
+        ec_level: EcLevel,
+
+        /// Quiet-zone modules around QR
+        #[arg(long, default_value = "4")]
+        quiet_zone: u32,
     },
 
     /// List available built-in PDK configurations
@@ -442,6 +661,55 @@ fn apply_transforms(bitmap: &mut ArtworkBitmap, invert: bool, rotate: u32, flip:
     }
 }
 
+fn resolve_text_input(text: Option<String>, text_file: Option<PathBuf>) -> Result<Option<String>> {
+    if text.is_some() && text_file.is_some() {
+        anyhow::bail!("--text and --text-file are mutually exclusive");
+    }
+    if let Some(path) = text_file {
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read text file: {}", path.display()))?;
+        return Ok(Some(contents));
+    }
+    Ok(text)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_overlays(
+    bitmap: &mut ArtworkBitmap,
+    text: Option<&str>,
+    text_position: OverlayPosition,
+    text_scale: u32,
+    qr: Option<&str>,
+    qr_position: OverlayPosition,
+    qr_module_size: u32,
+    qr_ec_level: EcLevel,
+    overlay_margin: u32,
+) -> Result<()> {
+    if let Some(s) = text {
+        let overlay = render_text(s, text_scale, 0, 2);
+        let (x, y) = text_position.place(
+            bitmap.width,
+            bitmap.height,
+            overlay.width,
+            overlay.height,
+            overlay_margin,
+        );
+        bitmap.composite(&overlay, x, y);
+    }
+    if let Some(data) = qr {
+        let overlay = render_qr(data, qr_module_size, qr_ec_level, 4)?;
+        let (x, y) = qr_position.place(
+            bitmap.width,
+            bitmap.height,
+            overlay.width,
+            overlay.height,
+            overlay_margin,
+        );
+        bitmap.composite(&overlay, x, y);
+    }
+    Ok(())
+}
+
 fn report_bounds(layer_results: &[(Vec<Rect>, &ArtworkLayerProfile)], pdk: &PdkConfig) {
     let all_rects: Vec<Rect> = layer_results
         .iter()
@@ -503,6 +771,15 @@ fn main() -> Result<()> {
             dry_run,
             deep_zoom,
             tile_resolution,
+            text,
+            text_file,
+            text_position,
+            text_scale,
+            qr,
+            qr_position,
+            qr_module_size,
+            qr_ec_level,
+            overlay_margin,
         } => {
             anyhow::ensure!(
                 matches!(rotate, 0 | 90 | 180 | 270),
@@ -545,6 +822,14 @@ fn main() -> Result<()> {
                 (None, None) => None,
             };
             let thresh = parse_threshold(&threshold)?;
+            let text = resolve_text_input(text, text_file)?;
+            let has_overlay = text.is_some() || qr.is_some();
+            if has_overlay {
+                anyhow::ensure!(
+                    matches!(color_mode, ColorModeArg::Single),
+                    "--text/--text-file/--qr overlays are only supported in --color-mode single"
+                );
+            }
 
             // Collect per-layer rects and profile references
             let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
@@ -560,6 +845,17 @@ fn main() -> Result<()> {
                         dither_mode,
                         rotate,
                         &flip,
+                    )?;
+                    apply_overlays(
+                        &mut bitmap,
+                        text.as_deref(),
+                        text_position,
+                        text_scale,
+                        qr.as_deref(),
+                        qr_position,
+                        qr_module_size,
+                        qr_ec_level,
+                        overlay_margin,
                     )?;
                     tracing::info!(
                         "Bitmap: {}x{}, density: {:.1}%",
@@ -799,6 +1095,15 @@ fn main() -> Result<()> {
             no_check_drc,
             color_mode,
             num_colors,
+            text,
+            text_file,
+            text_position,
+            text_scale,
+            qr,
+            qr_position,
+            qr_module_size,
+            qr_ec_level,
+            overlay_margin,
         } => {
             anyhow::ensure!(
                 matches!(rotate, 0 | 90 | 180 | 270),
@@ -840,6 +1145,14 @@ fn main() -> Result<()> {
                 (None, None) => None,
             };
             let thresh = parse_threshold(&threshold)?;
+            let text = resolve_text_input(text, text_file)?;
+            let has_overlay = text.is_some() || qr.is_some();
+            if has_overlay {
+                anyhow::ensure!(
+                    matches!(color_mode, ColorModeArg::Single),
+                    "--text/--text-file/--qr overlays are only supported in --color-mode single"
+                );
+            }
 
             let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
 
@@ -871,6 +1184,17 @@ fn main() -> Result<()> {
                         dither_mode,
                         rotate,
                         &flip,
+                    )?;
+                    apply_overlays(
+                        &mut bitmap,
+                        text.as_deref(),
+                        text_position,
+                        text_scale,
+                        qr.as_deref(),
+                        qr_position,
+                        qr_module_size,
+                        qr_ec_level,
+                        overlay_margin,
                     )?;
 
                     if let (Some(margin_um), Some(existing)) = (exclusion_margin, &exclusion_metal)
@@ -1023,6 +1347,201 @@ fn main() -> Result<()> {
             }
 
             tracing::info!("Done! Merged artwork into: {}", output.display());
+        }
+
+        Commands::Text {
+            text,
+            text_file,
+            output,
+            pdk,
+            cell_name,
+            library_name,
+            strategy,
+            separated,
+            invert,
+            svg,
+            html,
+            lef,
+            no_check_drc,
+            no_density_enforce,
+            force,
+            font_scale,
+            char_spacing,
+            line_spacing,
+        } => {
+            let text = resolve_text_input(text, text_file)?
+                .ok_or_else(|| anyhow::anyhow!("Provide inline text or --text-file"))?;
+            let pdk = load_pdk(&pdk)?;
+            let profiles = pdk.layer_profiles();
+            let profile = &profiles[0];
+            let strategy: PolygonStrategy = strategy.into();
+            let placement = if separated {
+                PixelPlacement::Separated
+            } else {
+                PixelPlacement::Touching
+            };
+            let density_enforce = !no_density_enforce;
+
+            let mut bitmap = render_text(&text, font_scale, char_spacing, line_spacing);
+            if invert {
+                bitmap.invert();
+            }
+
+            let rects = generate_layer_polygons(
+                &mut bitmap,
+                &pdk,
+                &profile.drc,
+                strategy,
+                placement,
+                density_enforce,
+                force,
+            )?;
+
+            if !no_check_drc {
+                let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &profile.drc);
+                report_drc(&violations);
+            }
+
+            let gds_layers = vec![LayerRects {
+                rects: &rects,
+                layer: profile.gds_layer,
+                datatype: profile.gds_datatype,
+            }];
+            write_gds_multi(
+                &gds_layers,
+                &cell_name,
+                &output,
+                &library_name,
+                pdk.pdk.db_units_per_um,
+            )?;
+
+            if let Some(lef_path) = lef {
+                let lef_layers = vec![LefLayer {
+                    rects: &rects,
+                    layer_name: &profile.name,
+                }];
+                write_lef_multi(&lef_layers, &pdk, &cell_name, &lef_path)?;
+            }
+
+            if let Some(svg_path) = svg {
+                let svg_layers = vec![SvgLayer {
+                    rects: rects.as_slice(),
+                    color: DEFAULT_LAYER_COLORS[0],
+                }];
+                let bb = bounding_box(&rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
+                let max_dim = bb.width().max(bb.height()).0 as f64;
+                let svg_scale = if max_dim > 0.0 {
+                    1024.0 / max_dim
+                } else {
+                    0.01
+                };
+                write_svg_multi(&svg_layers, &svg_path, svg_scale, Some("#1a1a2e"))?;
+            }
+
+            if let Some(html_path) = html {
+                let html_layers = vec![HtmlLayer {
+                    rects: &rects,
+                    name: &profile.name,
+                    color: DEFAULT_LAYER_COLORS[0],
+                }];
+                write_html_preview_multi(&html_layers, &html_path, &pdk)?;
+            }
+        }
+
+        Commands::Qr {
+            data,
+            output,
+            pdk,
+            cell_name,
+            library_name,
+            strategy,
+            separated,
+            invert,
+            svg,
+            html,
+            lef,
+            no_check_drc,
+            no_density_enforce,
+            force,
+            module_size,
+            ec_level,
+            quiet_zone,
+        } => {
+            let pdk = load_pdk(&pdk)?;
+            let profiles = pdk.layer_profiles();
+            let profile = &profiles[0];
+            let strategy: PolygonStrategy = strategy.into();
+            let placement = if separated {
+                PixelPlacement::Separated
+            } else {
+                PixelPlacement::Touching
+            };
+            let density_enforce = !no_density_enforce;
+
+            let mut bitmap = render_qr(&data, module_size, ec_level, quiet_zone)?;
+            if invert {
+                bitmap.invert();
+            }
+
+            let rects = generate_layer_polygons(
+                &mut bitmap,
+                &pdk,
+                &profile.drc,
+                strategy,
+                placement,
+                density_enforce,
+                force,
+            )?;
+
+            if !no_check_drc {
+                let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &profile.drc);
+                report_drc(&violations);
+            }
+
+            let gds_layers = vec![LayerRects {
+                rects: &rects,
+                layer: profile.gds_layer,
+                datatype: profile.gds_datatype,
+            }];
+            write_gds_multi(
+                &gds_layers,
+                &cell_name,
+                &output,
+                &library_name,
+                pdk.pdk.db_units_per_um,
+            )?;
+
+            if let Some(lef_path) = lef {
+                let lef_layers = vec![LefLayer {
+                    rects: &rects,
+                    layer_name: &profile.name,
+                }];
+                write_lef_multi(&lef_layers, &pdk, &cell_name, &lef_path)?;
+            }
+
+            if let Some(svg_path) = svg {
+                let svg_layers = vec![SvgLayer {
+                    rects: rects.as_slice(),
+                    color: DEFAULT_LAYER_COLORS[0],
+                }];
+                let bb = bounding_box(&rects).unwrap_or(Rect::new(0, 0, 1000, 1000));
+                let max_dim = bb.width().max(bb.height()).0 as f64;
+                let svg_scale = if max_dim > 0.0 {
+                    1024.0 / max_dim
+                } else {
+                    0.01
+                };
+                write_svg_multi(&svg_layers, &svg_path, svg_scale, Some("#1a1a2e"))?;
+            }
+
+            if let Some(html_path) = html {
+                let html_layers = vec![HtmlLayer {
+                    rects: &rects,
+                    name: &profile.name,
+                    color: DEFAULT_LAYER_COLORS[0],
+                }];
+                write_html_preview_multi(&html_layers, &html_path, &pdk)?;
+            }
         }
 
         Commands::ListPdks => {

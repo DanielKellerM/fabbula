@@ -49,6 +49,9 @@ tempfile = "3"
 # SVG rasterization (pure Rust)
 resvg = "0.45"
 
+# QR code generation
+qrcode = "0.14"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

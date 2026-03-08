@@ -59,10 +59,13 @@ pub mod lef;
 pub mod pdk;
 pub mod polygon;
 pub mod preview;
+pub mod qr;
+pub mod text;
 pub mod tiles;
 
 // Re-export key types for convenient library usage
-pub use artwork::{ArtworkBitmap, DitherMode, ThresholdMode};
+pub use artwork::{ArtworkBitmap, DitherMode, OverlayPosition, ThresholdMode};
 pub use drc::{DrcRule, DrcViolation};
 pub use pdk::{BuiltinPdk, DrcRules, LayerVariant, PdkConfig};
 pub use polygon::{Dbu, PixelPlacement, Point, PolygonStrategy, Rect};
+pub use qr::EcLevel;

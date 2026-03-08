@@ -10,6 +10,7 @@
 
 use crate::pdk::PdkConfig;
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use image::{DynamicImage, GenericImageView, Luma};
 use std::path::Path;
 
@@ -211,6 +212,58 @@ impl ArtworkBitmap {
             if let Some(last) = self.pixels.last_mut() {
                 *last &= mask;
             }
+        }
+    }
+
+    /// Composite `overlay` onto this bitmap at destination `(dst_x, dst_y)` using OR semantics.
+    ///
+    /// Any true pixels in `overlay` are set true in `self`. Existing true pixels are preserved.
+    /// Out-of-bounds pixels are silently clipped.
+    pub fn composite(&mut self, overlay: &ArtworkBitmap, dst_x: u32, dst_y: u32) {
+        for oy in 0..overlay.height {
+            for ox in 0..overlay.width {
+                if overlay.get(ox, oy) {
+                    self.set(dst_x.saturating_add(ox), dst_y.saturating_add(oy), true);
+                }
+            }
+        }
+    }
+}
+
+/// Placement presets for compositing overlays onto a bitmap canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OverlayPosition {
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Center,
+}
+
+impl OverlayPosition {
+    /// Compute top-left pixel placement for an overlay on a canvas.
+    pub fn place(
+        &self,
+        canvas_w: u32,
+        canvas_h: u32,
+        overlay_w: u32,
+        overlay_h: u32,
+        margin: u32,
+    ) -> (u32, u32) {
+        let max_x = canvas_w.saturating_sub(overlay_w);
+        let max_y = canvas_h.saturating_sub(overlay_h);
+        let center_x = canvas_w.saturating_sub(overlay_w) / 2;
+        let center_y = canvas_h.saturating_sub(overlay_h) / 2;
+        match self {
+            Self::Top => (center_x, margin.min(max_y)),
+            Self::Bottom => (center_x, max_y.saturating_sub(margin)),
+            Self::TopLeft => (margin.min(max_x), margin.min(max_y)),
+            Self::TopRight => (max_x.saturating_sub(margin), margin.min(max_y)),
+            Self::BottomLeft => (margin.min(max_x), max_y.saturating_sub(margin)),
+            Self::BottomRight => (max_x.saturating_sub(margin), max_y.saturating_sub(margin)),
+            Self::Center => (center_x, center_y),
         }
     }
 }
@@ -1507,5 +1560,44 @@ mod tests {
         assert!(w <= 50 && h <= 50);
         assert_eq!(w, 50); // Width-limited
         assert_eq!(h, 25); // Half height due to aspect ratio
+    }
+
+    #[test]
+    fn test_composite_or_semantics() {
+        let mut base = ArtworkBitmap::new_zeroed(4, 4);
+        base.set(1, 1, true);
+        let mut overlay = ArtworkBitmap::new_zeroed(2, 2);
+        overlay.set(0, 0, true);
+        overlay.set(1, 1, true);
+        base.composite(&overlay, 1, 1);
+        assert!(base.get(1, 1));
+        assert!(base.get(2, 2));
+    }
+
+    #[test]
+    fn test_composite_clipping() {
+        let mut base = ArtworkBitmap::new_zeroed(2, 2);
+        let mut overlay = ArtworkBitmap::new_zeroed(2, 2);
+        overlay.set(0, 0, true);
+        overlay.set(1, 1, true);
+        base.composite(&overlay, 1, 1);
+        assert!(base.get(1, 1));
+        assert_eq!(base.metal_count(), 1);
+    }
+
+    #[test]
+    fn test_overlay_position_corners_center() {
+        assert_eq!(OverlayPosition::TopLeft.place(100, 50, 20, 10, 2), (2, 2));
+        assert_eq!(
+            OverlayPosition::BottomRight.place(100, 50, 20, 10, 2),
+            (78, 38)
+        );
+        assert_eq!(OverlayPosition::Center.place(100, 50, 20, 10, 0), (40, 20));
+    }
+
+    #[test]
+    fn test_overlay_position_clamps_for_large_overlay() {
+        let (x, y) = OverlayPosition::BottomRight.place(10, 10, 20, 20, 4);
+        assert_eq!((x, y), (0, 0));
     }
 }
