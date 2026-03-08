@@ -511,6 +511,91 @@ but could hurt credibility with experts who know these aren't real.
   - Fixed: warn when rect count > 50k, suggesting --deep-zoom
   - Files: `src/preview.rs`
 
+## Differentiating Features
+
+- [ ] **P1** Text rendering and overlay
+  - Standalone mode: `fabbula text "RISC-V v2.1" -o label.gds -p sky130 --font monospace`
+  - Overlay mode: `--text "Team Name" --text-position bottom` composites text onto artwork bitmap before polygon generation
+  - White background thresholds away naturally (white = no metal)
+  - Font selection, size, position (top/bottom/corner), optional background clear region
+  - Implementation: rasterize font glyphs to bitmap, composite onto ArtworkBitmap, existing pipeline handles the rest
+  - Crate candidates: `rusttype` or `ab_glyph` for font rasterization
+  - Files: new `src/text.rs`, `src/artwork.rs` (composite), `src/main.rs` (CLI flags)
+
+- [ ] **P1** QR code generation
+  - Standalone mode: `fabbula qr "https://github.com/..." -o qr.gds -p sky130`
+  - Overlay mode: `--qr "https://..." --qr-position bottom-right` embeds QR into artwork corner
+  - QR library generates binary matrix - feed directly into existing bitmap pipeline
+  - Die identification and traceability - increasingly common in industry
+  - Crate candidates: `qrcode` crate (generates binary matrix, no image deps)
+  - Files: new `src/qr.rs`, `src/artwork.rs` (composite), `src/main.rs` (CLI flags)
+
+- [ ] **P1** WASM browser app (client-side, no server)
+  - First-of-its-kind: no browser-based GDSII generator exists anywhere
+  - Real-time interactive composition: drag image + text overlay + QR stamp, live polygon preview
+  - 100% client-side via WebAssembly - GDS never leaves user's machine, zero backend
+  - Custom PDK support via inline TOML editor with live validation
+  - Performance: 512x512 at ~8ms in WASM = 125 FPS, smooth real-time editing
+  - **Full plan: `todo/wasm_todo.md`** (5 phases, architecture, file structure, open questions)
+  - Files: new `src/wasm.rs`, `wasm/index.html`, `src/pdk.rs`, `src/gdsio.rs`, `src/artwork.rs`
+
+- [ ] **P1** Silicon-proven DRC validation results
+  - Run fabbula GDS output through open-source KLayout DRC decks (SKY130, GF180MCU, IHP)
+  - Publish "0 violations" screenshots/logs in README for credibility
+  - Closes the #1 gap vs ArtistIC (which is tapeout-proven on IHP SG13G2)
+  - Not a code feature but the single biggest credibility improvement
+  - Files: `README.md`, new `validation/` directory with scripts and results
+
+- [ ] **P2** OpenLane one-liner integration
+  - `fabbula openlane -i logo.png -p sky130 --macro-name artwork` generates GDS + LEF + config.json
+  - Output ready to drop into OpenLane macro flow (Zero to ASIC / Caravel audience)
+  - Already generates LEF - just add OpenLane config glue and documented recipe
+  - Files: `src/main.rs` (new subcommand), `docs/OPENLANE.md`
+
+- [ ] **P2** Additional dithering modes
+  - Bayer (ordered) dithering - regular pattern, retro aesthetic
+  - Atkinson dithering - classic Mac style, preserves detail
+  - Blue noise dithering - most natural-looking randomized pattern
+  - Implementation: different error diffusion matrices in `src/artwork.rs`
+  - ArtistIC uses 10 kernel primitives for this - more modes = more artistic control
+  - Files: `src/artwork.rs` (DitherMode enum expansion)
+
+- [ ] **P2** Grayscale-to-multi-layer mapping
+  - Map pixel brightness to metal stack depth (bright = top metal, dark = lower metals)
+  - chip_art does this for SKY130 metals 1-4 but without DRC awareness
+  - Combined with existing multi-layer infrastructure and per-layer DRC
+  - `--color-mode grayscale` using existing ArtworkLayerProfile system
+  - Files: `src/color.rs`, `src/main.rs`
+
+## Documentation Updates
+
+- [ ] **P1** Update README with new features (text, QR, WASM app)
+  - Add "Try it in your browser" section with link to GitHub Pages WASM app
+  - Add text rendering examples to Getting Started and CLI usage
+  - Add QR code examples to Getting Started
+  - Update comparison table: add "Browser app", "Text rendering", "QR code" rows
+  - Update roadmap checklist with new features
+  - Files: `README.md`
+
+- [ ] **P1** Update README roadmap section
+  - Mark completed items, add new planned features:
+    - [ ] Text rendering and overlay (standalone + composite)
+    - [ ] QR code generation (standalone + composite)
+    - [ ] WASM browser app with real-time preview
+    - [ ] Additional dithering modes (Bayer, Atkinson, blue noise)
+    - [ ] Custom PDK editor in browser
+  - Files: `README.md`
+
+- [ ] **P2** Add WASM app documentation page
+  - Usage guide for the browser app (for non-CLI users)
+  - Custom PDK TOML reference with examples
+  - Supported browsers and known limitations
+  - Files: new `docs/APP.md` or inline in `wasm/index.html`
+
+- [ ] **P2** Update gallery page with link to WASM app
+  - Add "Try it yourself" button/banner linking to the app
+  - Files: `docs/index.html`
+
 ## Gallery & Publication Prep
 
 - [x] **P1** Pre-publication artwork gallery expansion
