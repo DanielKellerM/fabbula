@@ -526,7 +526,10 @@ but could hurt credibility with experts who know these aren't real.
   - Focus: import externally authored assets (SVG/PNG), place/scale against die bounds from input GDS, run DRC-aware generation/export.
   - Keep simple overlays (text/QR) for labels/traceability, not full design authoring.
   - 100% client-side via WebAssembly - GDS never leaves user's machine.
-  - **Full plan: `todo/wasm_todo.md`** (updated to match scope boundary).
+  - Implemented: wasm API (`generate_from_pixels`, `generate_gds_bytes`, custom PDK validation), browser app in `docs/app`, canvas preview, DRC panel, GDS download.
+  - Remaining: die-aware placement canvas/composition model, mobile polish, docs/gallery README integration.
+  - Status: deferred for now.
+  - **Detailed status: `todo/wasm_todo.md`**.
 
 - [ ] **P1** Silicon-proven DRC validation results
   - Run fabbula GDS output through open-source KLayout DRC decks (SKY130, GF180MCU, IHP)

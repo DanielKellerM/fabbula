@@ -3,6 +3,9 @@
 > Scope boundary: fabbula is a manufacturing-aware placer/converter.
 > Artwork authoring stays in external tools (Inkscape/Figma/Illustrator), then assets are
 > imported into fabbula for die-aware placement, DRC-aware generation, and export.
+>
+> Status markers: `[ ]` not started, `[~]` in progress, `[x]` complete.
+> Project status: deferred for now.
 
 ## Competitive Position
 
@@ -77,11 +80,11 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
 
 > Make the library WASM-compatible without breaking CLI.
 
-- [ ] Add `PdkConfig::from_toml_str(content: &str)` public method
+- [x] Add `PdkConfig::from_toml_str(content: &str)` public method
   - `from_file()` already does `read_to_string` then `toml::from_str` - just expose the inner part
   - Files: `src/pdk.rs`
 
-- [ ] Add feature gates to `Cargo.toml`
+- [x] Add feature gates to `Cargo.toml`
   ```toml
   [features]
   default = ["cli"]
@@ -93,23 +96,27 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
   - `gds21` write must return `Vec<u8>` instead of writing to disk
   - Files: `Cargo.toml`, `src/lib.rs`, `src/drc.rs` (rayon gate), `src/gdsio.rs` (byte output)
 
-- [ ] Add `write_gds_to_bytes()` function
-  - Same as `write_gds_multi` but returns `Vec<u8>` instead of writing to Path
+- [x] Add `write_gds_to_bytes()` function
+  - Implemented as `write_gds_multi_to_bytes` returning `Vec<u8>`
   - gds21 serialization to in-memory buffer
   - Files: `src/gdsio.rs`
 
-- [ ] Add `threshold_from_pixels(pixels: &[u8], width: u32, height: u32)` function
+- [x] Add `threshold_from_pixels(pixels: &[u8], width: u32, height: u32)` function
+  - Implemented as `bitmap_from_rgba`
   - Skip image crate decode - canvas already gives RGBA pixels
   - Convert RGBA ImageData directly to ArtworkBitmap
   - Files: `src/artwork.rs`
 
-- [ ] Unit tests: verify pipeline works without rayon, verify byte output matches file output
+- [~] Unit tests: verify pipeline works without rayon, verify byte output matches file output
+  - Byte-output roundtrip test exists in `src/gdsio.rs`
+  - Still missing explicit no-rayon pipeline coverage for wasm paths
 
 ### Phase 1: WASM Entry Point
 
 > Minimal working WASM build that takes pixels in and returns rects out.
 
-- [ ] Create `src/wasm.rs` with `#[wasm_bindgen]` entry points:
+- [x] Create `src/wasm.rs` with `#[wasm_bindgen]` entry points:
+  - Implemented with structured `JsValue` request payload (`GenerateRequest`) rather than positional args
   ```rust
   #[wasm_bindgen]
   pub fn generate_from_pixels(
@@ -140,37 +147,39 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
   // [{ name, description, node_nm, min_width, min_spacing, ... }]
   ```
 
-- [ ] Build with `wasm-pack build --target web --features wasm`
+- [x] Build with `wasm-pack build --target web --features wasm`
+  - Automated in `wasm/build.sh` and artifacts are present under `docs/app/`
 - [ ] Verify WASM binary size (target: <2MB after wasm-opt)
-- [ ] Smoke test: load in browser, pass test pixels, verify rect output
+- [x] Smoke test: load in browser, pass test pixels, verify rect output
+  - Browser app bootloader + generated JS/WASM artifacts are wired via `docs/app/index.html`
 
 ### Phase 2: Minimal Browser UI
 
 > Import asset, pick PDK, place against die bounds, preview polygons, download GDS.
 
-- [ ] Create `wasm/index.html` - single self-contained HTML file
+- [~] Create `wasm/index.html` - single self-contained HTML file
   - PDK selector (tabs for 6 built-in + "Custom" tab)
   - Asset drop zone (drag-drop or file picker)
-  - Optional chip GDS input to set die/canvas bounds
+  - Optional chip GDS input to set die/canvas bounds (not implemented yet)
   - Strategy dropdown (greedy-merge default)
   - Invert / dither toggles
   - "Generate" button (or auto-generate on drop)
 
-- [ ] Canvas-based polygon preview
+- [x] Canvas-based polygon preview
   - Render returned rects as filled rectangles on Canvas2D
   - Pan (drag) and zoom (scroll wheel)
   - Dark background, metal color from PDK
   - Reuse visual style from existing HTML viewer
 
-- [ ] Stats bar
+- [x] Stats bar
   - Polygon count, artwork dimensions (um and mm), density %, DRC status
   - Update on every generation
 
-- [ ] GDS download button
+- [x] GDS download button
   - Calls `generate_gds_bytes()`, creates Blob, triggers `<a download>` click
   - File named `artwork_{pdk}.gds`
 
-- [ ] DRC results panel
+- [x] DRC results panel
   - Green badge: "DRC clean" with checkmark
   - Red badge: violation count + expandable list
 
@@ -184,7 +193,7 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
   - Canvas bounds driven by input GDS die extents when provided
   - Canvas composites placement bitmap for WASM input
 
-- [ ] Real-time pipeline loop
+- [~] Real-time pipeline loop
   ```js
   function onCompositionChange() {
       const pixels = compositeCanvas.getImageData(0, 0, w, h);
@@ -195,10 +204,10 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
       updateDrc(result.violations);
   }
   ```
-  - During drag: generate preview resolution (debounce for responsiveness)
-  - On release: generate at full resolution
+  - During interaction: debounced preview-resolution generation is implemented
+  - On release full-resolution refinement tied to composition drag/handles is still pending
 
-- [ ] Optional simple label overlays (text/QR)
+- [x] Optional simple label overlays (text/QR)
   - Single-purpose metadata/traceability labels
   - Keep controls minimal (payload, size, placement), no rich editor features
 
@@ -206,7 +215,7 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
 
 > Upload or edit PDK TOML in the browser with live validation.
 
-- [ ] "Custom PDK" tab opens inline TOML editor
+- [x] "Custom PDK" tab opens inline TOML editor
   - Textarea with monospace font, syntax highlighting (optional)
   - Pre-filled with template:
     ```toml
@@ -229,27 +238,30 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
     manufacturing_grid_um = 0.001
     ```
 
-- [ ] Live validation on every keystroke
+- [x] Live validation on every keystroke
   - Calls `wasm.validate_pdk_toml(text)` (microseconds)
   - Green: "Valid - pixel pitch: 0.800 um"
   - Red: inline error ("min_width must be > 0")
 
-- [ ] "Use template" dropdown: copy from any built-in PDK as starting point
-- [ ] "Upload .toml" button: reads file, populates editor
-- [ ] Custom PDK persists in localStorage between sessions
+- [x] "Use template" dropdown: copy from any built-in PDK as starting point
+- [x] "Upload .toml" button: reads file, populates editor
+- [x] Custom PDK persists in localStorage between sessions
 
 ### Phase 5: Polish and Ship
 
 > Production-ready app on GitHub Pages.
 
 - [ ] Responsive layout (works on tablet, degrades gracefully on mobile)
-- [ ] Loading state: show progress while WASM module loads (~1-2s first visit)
-- [ ] Error handling: friendly messages for invalid images, oversized files, WASM failures
-- [ ] Keyboard shortcuts: Ctrl+Z undo composition, Ctrl+S download GDS
-- [ ] URL params: `?pdk=sky130&demo=true` loads with sample image
-- [ ] Sample images: include 3-4 built-in demo images (base64 or fetched)
+- [x] Loading state: show progress while WASM module loads (~1-2s first visit)
+- [~] Error handling: friendly messages for invalid images, oversized files, WASM failures
+- [~] Keyboard shortcuts: Ctrl+Z undo composition, Ctrl+S download GDS
+  - Implemented: Ctrl/Cmd+S download, Ctrl/Cmd+Enter generate
+  - Missing: undo stack / Ctrl+Z
+- [x] URL params: `?pdk=sky130&demo=true` loads with sample image
+- [~] Sample images: include 3-4 built-in demo images (base64 or fetched)
+  - Implemented procedural demos via `?demo=gradient|checker|rings`
 - [ ] PWA manifest: installable as desktop app (optional)
-- [ ] GitHub Pages deployment: add to existing `docs/` or separate `wasm/dist/`
+- [x] GitHub Pages deployment: add to existing `docs/` or separate `wasm/dist/`
 - [ ] Link from main gallery page and README
 
 ---
@@ -258,14 +270,16 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
 
 ```
 wasm/
-  index.html          # Single-page app (HTML + inline CSS + JS)
-  build.sh            # wasm-pack build + wasm-opt + copy to docs/
+  index.html          # Bootloader page for docs/app
+  build.sh            # wasm-pack build + copy to docs/app
 src/
   wasm.rs             # #[wasm_bindgen] entry points
+  wasm_app.rs         # Core wasm pipeline and request/response types
+  wasm_dom.rs         # Browser UI + DOM event wiring
   lib.rs              # Feature-gated module inclusion
   pdk.rs              # from_toml_str() addition
-  gdsio.rs            # write_gds_to_bytes() addition
-  artwork.rs           # threshold_from_pixels() addition
+  gdsio.rs            # write_gds_multi_to_bytes() addition
+  artwork.rs          # bitmap_from_rgba() addition
   drc.rs              # Feature-gate rayon
 docs/
   app/                # Built WASM app served by GitHub Pages
@@ -276,22 +290,18 @@ docs/
 
 ## Dependencies (WASM-specific)
 
-```toml
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-js-sys = "0.3"
-serde-wasm-bindgen = "0.6"  # Rust structs -> JsValue
-```
-
-No new runtime dependencies for the CLI. WASM deps only compile for wasm32 target.
+WASM-specific crates are enabled through the `wasm` feature in `Cargo.toml`
+(`wasm-bindgen`, `js-sys`, `serde-wasm-bindgen`, `wasm-bindgen-futures`, `web-sys`).
 
 ## Open Questions
 
 - [ ] WASM binary size: gds21 + image + toml + serde could be large. Profile with `twiggy`.
   Target <2MB after wasm-opt. If too large, consider lazy-loading gds21 (only for download).
-- [ ] Keep text rendering scope minimal: Rust raster font options vs JS text; avoid rich typography/editor scope.
-- [ ] QR generation path: JS-side library or Rust `qrcode` in WASM; whichever keeps binary lean and deterministic.
+- [x] Keep text rendering scope minimal: Rust raster font options vs JS text; avoid rich typography/editor scope.
+  Implemented with simple Rust raster text overlays (no rich text/editor features).
+- [x] QR generation path: JS-side library or Rust `qrcode` in WASM; whichever keeps binary lean and deterministic.
+  Implemented with Rust `qrcode` path shared with CLI.
 - [ ] Multi-layer color modes: support channel/palette in WASM or single-layer only for v1?
   Start with single-layer, add multi-layer in a follow-up.
-- [ ] SVG preview vs Canvas2D for polygon rendering: Canvas2D is simpler and faster for
+- [x] SVG preview vs Canvas2D for polygon rendering: Canvas2D is simpler and faster for
   >10k rects. SVG better for <1k rects with zoom. Start with Canvas2D.
