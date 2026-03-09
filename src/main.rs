@@ -615,10 +615,38 @@ fn parse_size_um(s: &str, pdk: &PdkConfig, drc: &DrcRules, touching: bool) -> Re
     Ok((px_w, px_h))
 }
 
+type MaxDimensions = (Option<u32>, Option<u32>, Option<(u32, u32)>);
+
+fn resolve_max_dimensions(
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+    size_um: Option<&str>,
+    pdk: &PdkConfig,
+    drc: &DrcRules,
+    placement: PixelPlacement,
+) -> Result<MaxDimensions> {
+    let (max_width, max_height) = if let Some(size_str) = size_um {
+        let (pw, ph) = parse_size_um(size_str, pdk, drc, placement.is_touching())?;
+        (
+            Some(max_width.unwrap_or(pw).min(pw)),
+            Some(max_height.unwrap_or(ph).min(ph)),
+        )
+    } else {
+        (max_width, max_height)
+    };
+    let max_px = match (max_width, max_height) {
+        (Some(w), Some(h)) => Some((w, h)),
+        (Some(w), None) => Some((w, w)),
+        (None, Some(h)) => Some((h, h)),
+        (None, None) => None,
+    };
+    Ok((max_width, max_height, max_px))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prepare_bitmap(
     input: &Path,
-    threshold: &str,
+    threshold: ThresholdMode,
     max_width: Option<u32>,
     max_height: Option<u32>,
     invert: bool,
@@ -626,14 +654,13 @@ fn prepare_bitmap(
     rotate: u32,
     flip: &Option<FlipArg>,
 ) -> Result<ArtworkBitmap> {
-    let thresh = parse_threshold(threshold)?;
     let max_px = match (max_width, max_height) {
         (Some(w), Some(h)) => Some((w, h)),
         (Some(w), None) => Some((w, w)),
         (None, Some(h)) => Some((h, h)),
         (None, None) => None,
     };
-    let mut bitmap = load_artwork(input, thresh, max_px, dither)?;
+    let mut bitmap = load_artwork(input, threshold, max_px, dither)?;
     if invert {
         bitmap.invert();
     }
@@ -646,6 +673,151 @@ fn prepare_bitmap(
         None => {}
     }
     Ok(bitmap)
+}
+
+#[derive(Clone, Copy)]
+struct OverlayOptions<'a> {
+    text: Option<&'a str>,
+    text_position: OverlayPosition,
+    text_scale: u32,
+    qr: Option<&'a str>,
+    qr_position: OverlayPosition,
+    qr_module_size: u32,
+    qr_ec_level: EcLevel,
+    overlay_margin: u32,
+}
+
+struct RasterPipelineOptions<'a> {
+    input: &'a Path,
+    pdk: &'a PdkConfig,
+    color_mode: ColorModeArg,
+    num_colors: Option<usize>,
+    threshold: ThresholdMode,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+    max_px: Option<(u32, u32)>,
+    invert: bool,
+    dither_mode: DitherMode,
+    rotate: u32,
+    flip: &'a Option<FlipArg>,
+    strategy: PolygonStrategy,
+    placement: PixelPlacement,
+    density_enforce: bool,
+    force: bool,
+    overlays: Option<OverlayOptions<'a>>,
+    log_single_density: bool,
+}
+
+fn generate_layer_results<F>(
+    opts: &RasterPipelineOptions<'_>,
+    mut per_bitmap: F,
+) -> Result<Vec<(Vec<Rect>, usize)>>
+where
+    F: FnMut(&mut ArtworkBitmap) -> Result<()>,
+{
+    let profiles = opts.pdk.layer_profiles();
+    let mut layer_results: Vec<(Vec<Rect>, usize)> = Vec::new();
+    match opts.color_mode {
+        ColorModeArg::Single => {
+            let mut bitmap = prepare_bitmap(
+                opts.input,
+                opts.threshold,
+                opts.max_width,
+                opts.max_height,
+                opts.invert,
+                opts.dither_mode,
+                opts.rotate,
+                opts.flip,
+            )?;
+            if let Some(overlay) = opts.overlays {
+                apply_overlays(
+                    &mut bitmap,
+                    overlay.text,
+                    overlay.text_position,
+                    overlay.text_scale,
+                    overlay.qr,
+                    overlay.qr_position,
+                    overlay.qr_module_size,
+                    overlay.qr_ec_level,
+                    overlay.overlay_margin,
+                )?;
+            }
+            if opts.log_single_density {
+                tracing::info!(
+                    "Bitmap: {}x{}, density: {:.1}%",
+                    bitmap.width,
+                    bitmap.height,
+                    bitmap.density() * 100.0
+                );
+            }
+            per_bitmap(&mut bitmap)?;
+            let profile = &profiles[0];
+            let rects = generate_layer_polygons(
+                &mut bitmap,
+                opts.pdk,
+                &profile.drc,
+                opts.strategy,
+                opts.placement,
+                opts.density_enforce,
+                opts.force,
+            )?;
+            layer_results.push((rects, 0));
+        }
+        ColorModeArg::Channel => {
+            let shared_drc = most_conservative_drc(&profiles);
+            let layer_bitmaps =
+                extract_channels(opts.input, &profiles, opts.threshold, opts.max_px)?;
+            for LayerBitmap {
+                mut bitmap,
+                layer_index,
+            } in layer_bitmaps
+            {
+                apply_transforms(&mut bitmap, opts.invert, opts.rotate, opts.flip);
+                per_bitmap(&mut bitmap)?;
+                let rects = generate_layer_polygons(
+                    &mut bitmap,
+                    opts.pdk,
+                    &shared_drc,
+                    opts.strategy,
+                    opts.placement,
+                    opts.density_enforce,
+                    opts.force,
+                )?;
+                layer_results.push((rects, layer_index));
+            }
+        }
+        ColorModeArg::Palette => {
+            let shared_drc = most_conservative_drc(&profiles);
+            let n = opts.num_colors.unwrap_or(profiles.len());
+            anyhow::ensure!(
+                n <= profiles.len(),
+                "num_colors ({}) exceeds available artwork layer profiles ({}); \
+                 add more [[artwork_layers]] to your PDK or reduce --num-colors",
+                n,
+                profiles.len()
+            );
+            let layer_bitmaps = extract_palette(opts.input, n, opts.max_px)?;
+            for LayerBitmap {
+                mut bitmap,
+                layer_index,
+            } in layer_bitmaps
+            {
+                apply_transforms(&mut bitmap, opts.invert, opts.rotate, opts.flip);
+                per_bitmap(&mut bitmap)?;
+                let rects = generate_layer_polygons(
+                    &mut bitmap,
+                    opts.pdk,
+                    &shared_drc,
+                    opts.strategy,
+                    opts.placement,
+                    opts.density_enforce,
+                    opts.force,
+                )?;
+                layer_results.push((rects, layer_index));
+            }
+        }
+    }
+    Ok(layer_results)
 }
 
 /// Parse a "LAYER/DATATYPE" string into (i16, i16).
@@ -820,23 +992,15 @@ fn main() -> Result<()> {
                 ColorModeArg::Single => profiles[0].drc.clone(),
                 ColorModeArg::Channel | ColorModeArg::Palette => most_conservative_drc(&profiles),
             };
-            let (max_width, max_height) = if let Some(ref size_str) = size_um {
-                let (pw, ph) =
-                    parse_size_um(size_str, &pdk, &size_um_drc, placement.is_touching())?;
-                (
-                    Some(max_width.unwrap_or(pw).min(pw)),
-                    Some(max_height.unwrap_or(ph).min(ph)),
-                )
-            } else {
-                (max_width, max_height)
-            };
-            let max_px = match (max_width, max_height) {
-                (Some(w), Some(h)) => Some((w, h)),
-                (Some(w), None) => Some((w, w)),
-                (None, Some(h)) => Some((h, h)),
-                (None, None) => None,
-            };
-            let thresh = parse_threshold(&threshold)?;
+            let (max_width, max_height, max_px) = resolve_max_dimensions(
+                max_width,
+                max_height,
+                size_um.as_deref(),
+                &pdk,
+                &size_um_drc,
+                placement,
+            )?;
+            let threshold_mode = parse_threshold(&threshold)?;
             let text = resolve_text_input(text, text_file)?;
             let has_overlay = text.is_some() || qr.is_some();
             if has_overlay {
@@ -846,105 +1010,43 @@ fn main() -> Result<()> {
                 );
             }
 
-            // Collect per-layer rects and profile references
-            let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
-
-            match color_mode {
-                ColorModeArg::Single => {
-                    let mut bitmap = prepare_bitmap(
-                        &input,
-                        &threshold,
-                        max_width,
-                        max_height,
-                        invert,
-                        dither_mode,
-                        rotate,
-                        &flip,
-                    )?;
-                    apply_overlays(
-                        &mut bitmap,
-                        text.as_deref(),
-                        text_position,
-                        text_scale,
-                        qr.as_deref(),
-                        qr_position,
-                        qr_module_size,
-                        qr_ec_level,
-                        overlay_margin,
-                    )?;
-                    tracing::info!(
-                        "Bitmap: {}x{}, density: {:.1}%",
-                        bitmap.width,
-                        bitmap.height,
-                        bitmap.density() * 100.0
-                    );
-                    let profile = &profiles[0];
-                    let rects = generate_layer_polygons(
-                        &mut bitmap,
-                        &pdk,
-                        &profile.drc,
-                        strategy,
-                        placement,
-                        density_enforce,
-                        force,
-                    )?;
-                    layer_results.push((rects, profile));
-                }
-                ColorModeArg::Channel => {
-                    // Use the most conservative pitch so all layers align spatially
-                    let shared_drc = most_conservative_drc(&profiles);
-                    let layer_bitmaps = extract_channels(&input, &profiles, thresh, max_px)?;
-                    for LayerBitmap {
-                        mut bitmap,
-                        layer_index,
-                    } in layer_bitmaps
-                    {
-                        apply_transforms(&mut bitmap, invert, rotate, &flip);
-                        let profile = &profiles[layer_index];
-                        let rects = generate_layer_polygons(
-                            &mut bitmap,
-                            &pdk,
-                            &shared_drc,
-                            strategy,
-                            placement,
-                            density_enforce,
-                            force,
-                        )?;
-                        layer_results.push((rects, profile));
-                    }
-                }
-                ColorModeArg::Palette => {
-                    // Use the most conservative pitch so all layers align spatially
-                    let shared_drc = most_conservative_drc(&profiles);
-                    let n = num_colors.unwrap_or(profiles.len());
-                    anyhow::ensure!(
-                        n <= profiles.len(),
-                        "num_colors ({}) exceeds available artwork layer profiles ({}); \
-                         add more [[artwork_layers]] to your PDK or reduce --num-colors",
-                        n,
-                        profiles.len()
-                    );
-                    let layer_bitmaps = extract_palette(&input, n, max_px)?;
-                    for LayerBitmap {
-                        mut bitmap,
-                        layer_index,
-                    } in layer_bitmaps
-                    {
-                        apply_transforms(&mut bitmap, invert, rotate, &flip);
-                        let profile = &profiles[layer_index];
-                        let rects = generate_layer_polygons(
-                            &mut bitmap,
-                            &pdk,
-                            &shared_drc,
-                            strategy,
-                            placement,
-                            density_enforce,
-                            force,
-                        )?;
-                        layer_results.push((rects, profile));
-                    }
-                }
-            }
+            let overlays = has_overlay.then_some(OverlayOptions {
+                text: text.as_deref(),
+                text_position,
+                text_scale,
+                qr: qr.as_deref(),
+                qr_position,
+                qr_module_size,
+                qr_ec_level,
+                overlay_margin,
+            });
+            let layer_results = generate_layer_results(
+                &RasterPipelineOptions {
+                    input: &input,
+                    pdk: &pdk,
+                    color_mode,
+                    num_colors,
+                    threshold: threshold_mode,
+                    max_width,
+                    max_height,
+                    max_px,
+                    invert,
+                    dither_mode,
+                    rotate,
+                    flip: &flip,
+                    strategy,
+                    placement,
+                    density_enforce,
+                    force,
+                    overlays,
+                    log_single_density: true,
+                },
+                |_| Ok(()),
+            )?;
+            let layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = layer_results
+                .into_iter()
+                .map(|(rects, layer_index)| (rects, &profiles[layer_index]))
+                .collect();
 
             // Report artwork bounds
             report_bounds(&layer_results, &pdk);
@@ -1143,23 +1245,15 @@ fn main() -> Result<()> {
                 ColorModeArg::Single => profiles[0].drc.clone(),
                 ColorModeArg::Channel | ColorModeArg::Palette => most_conservative_drc(&profiles),
             };
-            let (max_width, max_height) = if let Some(ref size_str) = size_um {
-                let (pw, ph) =
-                    parse_size_um(size_str, &pdk, &size_um_drc, placement.is_touching())?;
-                (
-                    Some(max_width.unwrap_or(pw).min(pw)),
-                    Some(max_height.unwrap_or(ph).min(ph)),
-                )
-            } else {
-                (max_width, max_height)
-            };
-            let max_px = match (max_width, max_height) {
-                (Some(w), Some(h)) => Some((w, h)),
-                (Some(w), None) => Some((w, w)),
-                (None, Some(h)) => Some((h, h)),
-                (None, None) => None,
-            };
-            let thresh = parse_threshold(&threshold)?;
+            let (max_width, max_height, max_px) = resolve_max_dimensions(
+                max_width,
+                max_height,
+                size_um.as_deref(),
+                &pdk,
+                &size_um_drc,
+                placement,
+            )?;
+            let threshold_mode = parse_threshold(&threshold)?;
             let text = resolve_text_input(text, text_file)?;
             let has_overlay = text.is_some() || qr.is_some();
             if has_overlay {
@@ -1168,8 +1262,6 @@ fn main() -> Result<()> {
                     "--text/--text-file/--qr overlays are only supported in --color-mode single"
                 );
             }
-
-            let mut layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = Vec::new();
 
             // Read existing metal once for exclusion (shared across all color modes)
             let exclusion_override = exclusion_layer
@@ -1188,113 +1280,50 @@ fn main() -> Result<()> {
                 None
             };
 
-            match color_mode {
-                ColorModeArg::Single => {
-                    let mut bitmap = prepare_bitmap(
-                        &input,
-                        &threshold,
-                        max_width,
-                        max_height,
-                        invert,
-                        dither_mode,
-                        rotate,
-                        &flip,
-                    )?;
-                    apply_overlays(
-                        &mut bitmap,
-                        text.as_deref(),
-                        text_position,
-                        text_scale,
-                        qr.as_deref(),
-                        qr_position,
-                        qr_module_size,
-                        qr_ec_level,
-                        overlay_margin,
-                    )?;
-
+            let overlays = has_overlay.then_some(OverlayOptions {
+                text: text.as_deref(),
+                text_position,
+                text_scale,
+                qr: qr.as_deref(),
+                qr_position,
+                qr_module_size,
+                qr_ec_level,
+                overlay_margin,
+            });
+            let layer_results = generate_layer_results(
+                &RasterPipelineOptions {
+                    input: &input,
+                    pdk: &pdk,
+                    color_mode,
+                    num_colors,
+                    threshold: threshold_mode,
+                    max_width,
+                    max_height,
+                    max_px,
+                    invert,
+                    dither_mode,
+                    rotate,
+                    flip: &flip,
+                    strategy,
+                    placement,
+                    density_enforce,
+                    force,
+                    overlays,
+                    log_single_density: false,
+                },
+                |bitmap| {
                     if let (Some(margin_um), Some(existing)) = (exclusion_margin, &exclusion_metal)
                     {
                         let margin_dbu = pdk.um_to_dbu(margin_um);
-                        apply_exclusion_mask(&mut bitmap, existing, &pdk, margin_dbu);
+                        apply_exclusion_mask(bitmap, existing, &pdk, margin_dbu);
                     }
-
-                    let profile = &profiles[0];
-                    let rects = generate_layer_polygons(
-                        &mut bitmap,
-                        &pdk,
-                        &profile.drc,
-                        strategy,
-                        placement,
-                        density_enforce,
-                        force,
-                    )?;
-                    layer_results.push((rects, profile));
-                }
-                ColorModeArg::Channel => {
-                    let shared_drc = most_conservative_drc(&profiles);
-                    let layer_bitmaps = extract_channels(&input, &profiles, thresh, max_px)?;
-                    for LayerBitmap {
-                        mut bitmap,
-                        layer_index,
-                    } in layer_bitmaps
-                    {
-                        apply_transforms(&mut bitmap, invert, rotate, &flip);
-                        if let (Some(margin_um), Some(existing)) =
-                            (exclusion_margin, &exclusion_metal)
-                        {
-                            let margin_dbu = pdk.um_to_dbu(margin_um);
-                            apply_exclusion_mask(&mut bitmap, existing, &pdk, margin_dbu);
-                        }
-                        let profile = &profiles[layer_index];
-                        let rects = generate_layer_polygons(
-                            &mut bitmap,
-                            &pdk,
-                            &shared_drc,
-                            strategy,
-                            placement,
-                            density_enforce,
-                            force,
-                        )?;
-                        layer_results.push((rects, profile));
-                    }
-                }
-                ColorModeArg::Palette => {
-                    let shared_drc = most_conservative_drc(&profiles);
-                    let n = num_colors.unwrap_or(profiles.len());
-                    anyhow::ensure!(
-                        n <= profiles.len(),
-                        "num_colors ({}) exceeds available artwork layer profiles ({}); \
-                         add more [[artwork_layers]] to your PDK or reduce --num-colors",
-                        n,
-                        profiles.len()
-                    );
-                    let layer_bitmaps = extract_palette(&input, n, max_px)?;
-                    for LayerBitmap {
-                        mut bitmap,
-                        layer_index,
-                    } in layer_bitmaps
-                    {
-                        apply_transforms(&mut bitmap, invert, rotate, &flip);
-                        if let (Some(margin_um), Some(existing)) =
-                            (exclusion_margin, &exclusion_metal)
-                        {
-                            let margin_dbu = pdk.um_to_dbu(margin_um);
-                            apply_exclusion_mask(&mut bitmap, existing, &pdk, margin_dbu);
-                        }
-                        let profile = &profiles[layer_index];
-                        let rects = generate_layer_polygons(
-                            &mut bitmap,
-                            &pdk,
-                            &shared_drc,
-                            strategy,
-                            placement,
-                            density_enforce,
-                            force,
-                        )?;
-                        layer_results.push((rects, profile));
-                    }
-                }
-            }
+                    Ok(())
+                },
+            )?;
+            let layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = layer_results
+                .into_iter()
+                .map(|(rects, layer_index)| (rects, &profiles[layer_index]))
+                .collect();
 
             // Report artwork bounds
             report_bounds(&layer_results, &pdk);

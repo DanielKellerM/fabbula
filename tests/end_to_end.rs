@@ -184,6 +184,42 @@ fn touching_mode_all_pdks_all_strategies() {
     }
 }
 
+/// Exhaustive touching-mode validation on all 3x3 binary patterns.
+/// This is intentionally small but complete: 2^9 = 512 exact inputs.
+#[test]
+fn touching_mode_exhaustive_3x3_patterns_all_pdks_all_strategies() {
+    let patterns = 1u16 << 9;
+    for builtin in PdkConfig::list_builtins() {
+        let pdk = PdkConfig::builtin(builtin.name()).unwrap();
+        for strategy in [
+            PolygonStrategy::PixelRects,
+            PolygonStrategy::RowMerge,
+            PolygonStrategy::GreedyMerge,
+            PolygonStrategy::HistogramMerge,
+        ] {
+            for mask in 0..patterns {
+                let mut bits = [false; 9];
+                for (bit, cell) in bits.iter_mut().enumerate() {
+                    *cell = (mask & (1u16 << bit)) != 0;
+                }
+                let bitmap = ArtworkBitmap::from_bools(3, 3, &bits);
+                let rects =
+                    generate_polygons(&bitmap, &pdk, &pdk.drc, strategy, PixelPlacement::Touching)
+                        .unwrap();
+                let violations = check_drc(&rects, pdk.pdk.db_units_per_um, &pdk.drc);
+                assert!(
+                    violations.is_empty(),
+                    "{} {:?} mask={:09b} touching mode DRC violations: {:?}",
+                    builtin.name(),
+                    strategy,
+                    mask,
+                    violations
+                );
+            }
+        }
+    }
+}
+
 /// All strategies produce DRC-clean output for the same input.
 #[test]
 fn all_strategies_drc_clean() {

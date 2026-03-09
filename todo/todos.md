@@ -345,19 +345,19 @@
   - Coverage improved from 52% to 78%
   - Files: `src/generation.rs`
 
-- [ ] **P1** Generate and Merge share ~80% duplicated logic in main.rs
-  - Deferred: large refactor with high risk of regressions; both paths work correctly
-  - The DRC and density enforcement are now consistent between both commands
+- [x] **P1** Generate and Merge share ~80% duplicated logic in main.rs
+  - Fixed: extracted shared raster pipeline helpers (`resolve_max_dimensions`, `generate_layer_results`)
+  - Generate and Merge now share the same layer-generation path for single/channel/palette modes
+  - Merge keeps exclusion behavior via per-bitmap callback hook (no behavior regression)
   - Files: `src/main.rs`
 
 - [x] **P1** No off-grid validation after merge offset
   - Fixed: added manufacturing grid alignment warning for offset-x/offset-y
   - Files: `src/main.rs`
 
-- [ ] **P1** Touching mode DRC-by-construction lacks exhaustive test coverage
-  - Deferred: existing end_to_end tests cover all PDKs x all strategies in touching mode
-  - The touching_mode_all_pdks_all_strategies test verifies DRC-clean output
-  - Proptest would add value but is a significant new dependency
+- [x] **P1** Touching mode DRC-by-construction lacks exhaustive test coverage
+  - Added exhaustive 3x3 bitmap corpus test (all 512 patterns)
+  - Validates all built-in PDKs x all strategies in touching mode (no DRC violations)
   - Files: `tests/end_to_end.rs`
 
 ### P2 - Quality / Credibility
