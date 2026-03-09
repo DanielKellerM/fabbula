@@ -18,11 +18,11 @@ default = ["cli", "rayon", "gui"]
 cli = ["dep:clap", "dep:tracing-subscriber"]
 gui = ["dep:eframe", "dep:rfd"]
 wasm = [
-    "dep:wasm-bindgen",
-    "dep:js-sys",
-    "dep:serde-wasm-bindgen",
-    "dep:wasm-bindgen-futures",
-    "dep:web-sys",
+  "dep:wasm-bindgen",
+  "dep:js-sys",
+  "dep:serde-wasm-bindgen",
+  "dep:wasm-bindgen-futures",
+  "dep:web-sys",
 ]
 rayon = ["dep:rayon"]
 
@@ -48,7 +48,9 @@ anyhow = "1"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+], optional = true }
 
 # Parallelism for large images
 rayon = { version = "1", optional = true }
@@ -76,34 +78,34 @@ js-sys = { version = "0.3", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
-    "Window",
-    "Location",
-    "Storage",
-    "Document",
-    "Element",
-    "HtmlElement",
-    "Node",
-    "EventTarget",
-    "Event",
-    "HtmlInputElement",
-    "HtmlTextAreaElement",
-    "HtmlSelectElement",
-    "HtmlOptionElement",
-    "HtmlButtonElement",
-    "HtmlCanvasElement",
-    "CanvasRenderingContext2d",
-    "HtmlImageElement",
-    "ImageData",
-    "File",
-    "FileList",
-    "Blob",
-    "FileReader",
-    "ProgressEvent",
-    "Url",
-    "HtmlAnchorElement",
-    "MouseEvent",
-    "WheelEvent",
-    "KeyboardEvent",
+  "Window",
+  "Location",
+  "Storage",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "Node",
+  "EventTarget",
+  "Event",
+  "HtmlInputElement",
+  "HtmlTextAreaElement",
+  "HtmlSelectElement",
+  "HtmlOptionElement",
+  "HtmlButtonElement",
+  "HtmlCanvasElement",
+  "CanvasRenderingContext2d",
+  "HtmlImageElement",
+  "ImageData",
+  "File",
+  "FileList",
+  "Blob",
+  "FileReader",
+  "ProgressEvent",
+  "Url",
+  "HtmlAnchorElement",
+  "MouseEvent",
+  "WheelEvent",
+  "KeyboardEvent",
 ] }
 
 [profile.release]
