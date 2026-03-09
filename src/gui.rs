@@ -7,7 +7,7 @@ use eframe::egui::{self, Color32, CursorIcon, Pos2, Sense, Stroke, TextureHandle
 use fabbula::OverlayPosition;
 use fabbula::artwork::{ArtworkBitmap, DitherMode, ThresholdMode, load_artwork};
 use fabbula::drc::check_drc;
-use fabbula::gdsio::{LayerRects, read_gds_bounds, write_gds_multi};
+use fabbula::gdsio::{LayerRects, merge_into_gds_multi, read_gds_bounds, write_gds_multi};
 use fabbula::generation::generate_layer_polygons;
 use fabbula::lef::{LefLayer, write_lef_multi};
 use fabbula::pdk::{BuiltinPdk, PdkConfig};
@@ -44,6 +44,7 @@ const AUTO_REGEN_DEBOUNCE_MS: u64 = 250;
 const DEFAULT_CORE_INSET_DIV: i32 = 10;
 const INTERACTION_REGEN_DEBOUNCE_MS: u64 = 120;
 const INTERACTION_PREVIEW_MAX_DIM: u32 = 512;
+const DEFAULT_CANVAS_SIZE: u32 = 1024;
 
 #[derive(Debug, Clone)]
 struct GenerationConfig {
@@ -493,8 +494,8 @@ impl FabbulaGuiApp {
             qr_manual_xy: None,
             overlay_margin: 2,
             overlay_knockout_padding: 2,
-            canvas_width: 0,
-            canvas_height: 0,
+            canvas_width: DEFAULT_CANVAS_SIZE,
+            canvas_height: DEFAULT_CANVAS_SIZE,
             image_x: 0,
             image_y: 0,
             image_scale_x_pct: 100,
@@ -633,8 +634,13 @@ impl FabbulaGuiApp {
         self.output_path = s.output_path;
         self.cell_name = s.cell_name;
         self.library_name = s.library_name;
-        self.canvas_width = s.canvas_width;
-        self.canvas_height = s.canvas_height;
+        if s.canvas_width == 0 && s.canvas_height == 0 {
+            self.canvas_width = DEFAULT_CANVAS_SIZE;
+            self.canvas_height = DEFAULT_CANVAS_SIZE;
+        } else {
+            self.canvas_width = s.canvas_width;
+            self.canvas_height = s.canvas_height;
+        }
         self.image_x = s.image_x;
         self.image_y = s.image_y;
         let base_scale = s.image_scale_pct.max(1);
@@ -1117,6 +1123,65 @@ impl FabbulaGuiApp {
             Path::new(&self.output_path),
             &self.library_name,
             result.pdk.pdk.db_units_per_um,
+        )?;
+        Ok(())
+    }
+
+    fn save_merged_chip_gds(&self) -> Result<()> {
+        let result = self
+            .last_result
+            .as_ref()
+            .context("Nothing to merge yet; run Generate first")?;
+        anyhow::ensure!(
+            !self.chip_gds_path.trim().is_empty(),
+            "Chip GDS path is empty; set it in Artwork Placement"
+        );
+
+        let (dx, dy) = if self.use_die_bounds {
+            let bounds = read_gds_bounds(
+                Path::new(&self.chip_gds_path),
+                if self.chip_cell_name.trim().is_empty() {
+                    None
+                } else {
+                    Some(self.chip_cell_name.trim())
+                },
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to read die bounds from chip GDS: {}",
+                    self.chip_gds_path
+                )
+            })?;
+            (bounds.x0.0, bounds.y0.0)
+        } else {
+            (0, 0)
+        };
+        let shifted_rects: Vec<PolyRect> = if dx == 0 && dy == 0 {
+            result.rects.clone()
+        } else {
+            result
+                .rects
+                .iter()
+                .map(|r| PolyRect::new(r.x0.0 + dx, r.y0.0 + dy, r.x1.0 + dx, r.y1.0 + dy))
+                .collect()
+        };
+        let gds_layers = vec![LayerRects {
+            rects: shifted_rects.as_slice(),
+            layer: result.layer,
+            datatype: result.datatype,
+        }];
+
+        merge_into_gds_multi(
+            &gds_layers,
+            Path::new(&self.chip_gds_path),
+            Path::new(&self.output_path),
+            if self.chip_cell_name.trim().is_empty() {
+                None
+            } else {
+                Some(self.chip_cell_name.trim())
+            },
+            0,
+            0,
         )?;
         Ok(())
     }
@@ -1646,6 +1711,24 @@ impl FabbulaGuiApp {
                     }
                     Err(e) => {
                         self.status = format!("Save failed: {e:#}");
+                        self.status_is_error = true;
+                    }
+                }
+            }
+            let can_merge = self.last_result.is_some()
+                && !self.result_is_preview
+                && !self.chip_gds_path.trim().is_empty();
+            if ui
+                .add_enabled(can_merge, egui::Button::new("Merge & Save Chip GDS"))
+                .clicked()
+            {
+                match self.save_merged_chip_gds() {
+                    Ok(()) => {
+                        self.status = format!("Merged artwork into {}", self.output_path);
+                        self.status_is_error = false;
+                    }
+                    Err(e) => {
+                        self.status = format!("Merge save failed: {e:#}");
                         self.status_is_error = true;
                     }
                 }
@@ -2848,10 +2931,18 @@ fn run_generation_job(
             )
         }
     } else {
-        (
-            cfg.canvas_width.max(auto_w).max(1),
-            cfg.canvas_height.max(auto_h).max(1),
-        )
+        // Explicit non-zero canvas dimensions are treated as fixed.
+        let cw = if cfg.canvas_width == 0 {
+            auto_w.max(1)
+        } else {
+            cfg.canvas_width.max(1)
+        };
+        let ch = if cfg.canvas_height == 0 {
+            auto_h.max(1)
+        } else {
+            cfg.canvas_height.max(1)
+        };
+        (cw, ch)
     };
     let mut bitmap = ArtworkBitmap::new_zeroed(canvas_w, canvas_h);
     bitmap.composite(&scaled, image_x, image_y);
