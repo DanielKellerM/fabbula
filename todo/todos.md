@@ -513,31 +513,20 @@ but could hurt credibility with experts who know these aren't real.
 
 ## Differentiating Features
 
-- [ ] **P1** Text rendering and overlay
-  - Standalone mode: `fabbula text "RISC-V v2.1" -o label.gds -p sky130 --font monospace`
-  - Overlay mode: `--text "Team Name" --text-position bottom` composites text onto artwork bitmap before polygon generation
-  - White background thresholds away naturally (white = no metal)
-  - Font selection, size, position (top/bottom/corner), optional background clear region
-  - Implementation: rasterize font glyphs to bitmap, composite onto ArtworkBitmap, existing pipeline handles the rest
-  - Crate candidates: `rusttype` or `ab_glyph` for font rasterization
-  - Files: new `src/text.rs`, `src/artwork.rs` (composite), `src/main.rs` (CLI flags)
+- [x] **P1** Text rendering and overlay
+  - Implemented standalone and overlay workflows in CLI/GUI.
+  - Scope boundary: simple raster font choices and placement only; no rich text editor ambitions.
 
-- [ ] **P1** QR code generation
-  - Standalone mode: `fabbula qr "https://github.com/..." -o qr.gds -p sky130`
-  - Overlay mode: `--qr "https://..." --qr-position bottom-right` embeds QR into artwork corner
-  - QR library generates binary matrix - feed directly into existing bitmap pipeline
-  - Die identification and traceability - increasingly common in industry
-  - Crate candidates: `qrcode` crate (generates binary matrix, no image deps)
-  - Files: new `src/qr.rs`, `src/artwork.rs` (composite), `src/main.rs` (CLI flags)
+- [x] **P1** QR code generation
+  - Implemented standalone and overlay workflows in CLI/GUI.
+  - Scope boundary: payload + placement + sizing only; no QR design/editor tooling.
 
 - [ ] **P1** WASM browser app (client-side, no server)
-  - First-of-its-kind: no browser-based GDSII generator exists anywhere
-  - Real-time interactive composition: drag image + text overlay + QR stamp, live polygon preview
-  - 100% client-side via WebAssembly - GDS never leaves user's machine, zero backend
-  - Custom PDK support via inline TOML editor with live validation
-  - Performance: 512x512 at ~8ms in WASM = 125 FPS, smooth real-time editing
-  - **Full plan: `todo/wasm_todo.md`** (5 phases, architecture, file structure, open questions)
-  - Files: new `src/wasm.rs`, `wasm/index.html`, `src/pdk.rs`, `src/gdsio.rs`, `src/artwork.rs`
+  - Product boundary: fabbula is a manufacturing-aware placer/converter, not a full artwork editor.
+  - Focus: import externally authored assets (SVG/PNG), place/scale against die bounds from input GDS, run DRC-aware generation/export.
+  - Keep simple overlays (text/QR) for labels/traceability, not full design authoring.
+  - 100% client-side via WebAssembly - GDS never leaves user's machine.
+  - **Full plan: `todo/wasm_todo.md`** (updated to match scope boundary).
 
 - [ ] **P1** Silicon-proven DRC validation results
   - Run fabbula GDS output through open-source KLayout DRC decks (SKY130, GF180MCU, IHP)
@@ -571,17 +560,16 @@ but could hurt credibility with experts who know these aren't real.
 
 - [ ] **P1** Update README with new features (text, QR, WASM app)
   - Add "Try it in your browser" section with link to GitHub Pages WASM app
-  - Add text rendering examples to Getting Started and CLI usage
-  - Add QR code examples to Getting Started
-  - Update comparison table: add "Browser app", "Text rendering", "QR code" rows
-  - Update roadmap checklist with new features
+  - Clarify product scope: design in Inkscape/Figma/etc., then place/scale/DRC/export in fabbula
+  - Add text/QR examples as labeling/traceability features (not rich editing)
+  - Update comparison table with placement + DRC-aware conversion focus
   - Files: `README.md`
 
 - [ ] **P1** Update README roadmap section
   - Mark completed items, add new planned features:
-    - [ ] Text rendering and overlay (standalone + composite)
-    - [ ] QR code generation (standalone + composite)
-    - [ ] WASM browser app with real-time preview
+    - [x] Text rendering and overlay (standalone + composite)
+    - [x] QR code generation (standalone + composite)
+    - [ ] WASM/browser + desktop placer with die-aware image placement
     - [ ] Additional dithering modes (Bayer, Atkinson, blue noise)
     - [ ] Custom PDK editor in browser
   - Files: `README.md`

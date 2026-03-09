@@ -62,6 +62,12 @@ pub mod preview;
 pub mod qr;
 pub mod text;
 pub mod tiles;
+#[cfg(feature = "wasm")]
+pub mod wasm;
+#[cfg(feature = "wasm")]
+pub(crate) mod wasm_app;
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+pub(crate) mod wasm_dom;
 
 // Re-export key types for convenient library usage
 pub use artwork::{ArtworkBitmap, DitherMode, OverlayPosition, ThresholdMode};

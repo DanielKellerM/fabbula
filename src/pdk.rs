@@ -340,22 +340,25 @@ pub struct PdkConfig {
 }
 
 impl PdkConfig {
+    /// Parse a PDK config from TOML content.
+    pub fn from_toml_str(content: &str) -> Result<Self> {
+        let config: PdkConfig = toml::from_str(content).context("Failed to parse PDK config")?;
+        config.validate()?;
+        Ok(config)
+    }
+
     /// Load a PDK config from a TOML file
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read PDK config: {}", path.display()))?;
-        let config: PdkConfig = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse PDK config: {}", path.display()))?;
-        config.validate()?;
-        Ok(config)
+        Self::from_toml_str(&content)
+            .with_context(|| format!("Failed to parse PDK config: {}", path.display()))
     }
 
     /// Load a built-in PDK by name
     pub fn builtin(name: &str) -> Result<Self> {
         let pdk_id: BuiltinPdk = name.parse()?;
-        let config: PdkConfig = toml::from_str(pdk_id.toml_content())?;
-        config.validate()?;
-        Ok(config)
+        Self::from_toml_str(pdk_id.toml_content())
     }
 
     /// List available built-in PDKs
@@ -752,6 +755,12 @@ manufacturing_grid_um = 0.005
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         write!(tmp, "{}", bad_toml).unwrap();
         assert!(PdkConfig::from_file(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn test_from_toml_str_valid() {
+        let config = PdkConfig::from_toml_str(BuiltinPdk::Sky130.toml_content()).unwrap();
+        assert_eq!(config.pdk.name, "sky130");
     }
 
     #[test]

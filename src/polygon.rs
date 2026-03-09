@@ -12,6 +12,7 @@
 use crate::artwork::ArtworkBitmap;
 use crate::pdk::{DrcRules, PdkConfig};
 use anyhow::Result;
+#[cfg(feature = "rayon")]
 use rayon::prelude::*;
 
 /// A value in database units (typically nanometers).
@@ -363,6 +364,7 @@ pub fn generate_polygons(
 const PARALLEL_PIXEL_THRESHOLD: usize = 800_000;
 
 /// Height of each horizontal strip for parallel greedy merge
+#[cfg_attr(not(feature = "rayon"), allow(dead_code))]
 const STRIP_HEIGHT: usize = 256;
 
 /// Convert image Y coordinate (top-down, 0 at top) to layout Y coordinate (bottom-up).
@@ -377,23 +379,35 @@ fn image_y_to_layout(image_y: u32, image_height: u32, pitch: i32) -> i32 {
 /// Simplest: one rectangle per pixel
 fn pixel_rects(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
     let total = bitmap.width as usize * bitmap.height as usize;
+    #[cfg(not(feature = "rayon"))]
+    let _ = total;
+
     if total < PARALLEL_PIXEL_THRESHOLD {
         return pixel_rects_serial(bitmap, pixel_w, pitch);
     }
-    (0..bitmap.height)
-        .into_par_iter()
-        .flat_map_iter(|y| {
-            let y0 = image_y_to_layout(y, bitmap.height, pitch);
-            (0..bitmap.width).filter_map(move |x| {
-                if bitmap.get(x, y) {
-                    let x0 = x as i32 * pitch;
-                    Some(Rect::new(x0, y0, x0 + pixel_w, y0 + pixel_w))
-                } else {
-                    None
-                }
+
+    #[cfg(feature = "rayon")]
+    {
+        (0..bitmap.height)
+            .into_par_iter()
+            .flat_map_iter(|y| {
+                let y0 = image_y_to_layout(y, bitmap.height, pitch);
+                (0..bitmap.width).filter_map(move |x| {
+                    if bitmap.get(x, y) {
+                        let x0 = x as i32 * pitch;
+                        Some(Rect::new(x0, y0, x0 + pixel_w, y0 + pixel_w))
+                    } else {
+                        None
+                    }
+                })
             })
-        })
-        .collect()
+            .collect()
+    }
+
+    #[cfg(not(feature = "rayon"))]
+    {
+        pixel_rects_serial(bitmap, pixel_w, pitch)
+    }
 }
 
 fn pixel_rects_serial(bitmap: &ArtworkBitmap, pixel_w: i32, pitch: i32) -> Vec<Rect> {
@@ -548,6 +562,7 @@ fn greedy_merged_rects(
     let mut runs = vec![0u16; total];
     let words = bitmap.words();
 
+    #[cfg(feature = "rayon")]
     if total >= PARALLEL_PIXEL_THRESHOLD {
         // Parallel runs computation - each row is independent
         runs.par_chunks_mut(w)
@@ -565,7 +580,25 @@ fn greedy_merged_rects(
                     row_runs[x] = count;
                 }
             });
-    } else {
+    }
+    #[cfg(feature = "rayon")]
+    if total < PARALLEL_PIXEL_THRESHOLD {
+        for y in 0..h {
+            let row_start = y * w;
+            let mut count = 0u16;
+            for x in (0..w).rev() {
+                let bit_idx = row_start + x;
+                if words[bit_idx / 64] & (1u64 << (bit_idx % 64)) != 0 {
+                    count += 1;
+                } else {
+                    count = 0;
+                }
+                runs[row_start + x] = count;
+            }
+        }
+    }
+    #[cfg(not(feature = "rayon"))]
+    {
         for y in 0..h {
             let row_start = y * w;
             let mut count = 0u16;
@@ -581,16 +614,17 @@ fn greedy_merged_rects(
         }
     }
 
-    // For large bitmaps, use strip-based parallel greedy merge
+    #[cfg(feature = "rayon")]
     if total >= PARALLEL_PIXEL_THRESHOLD && h > STRIP_HEIGHT {
-        greedy_merge_parallel_strips(words, &runs, w, h, pixel_w, pitch, max_merge)
-    } else {
-        greedy_merge_strip(words, &runs, w, 0, h, h, pixel_w, pitch, max_merge)
+        return greedy_merge_parallel_strips(words, &runs, w, h, pixel_w, pitch, max_merge);
     }
+
+    greedy_merge_strip(words, &runs, w, 0, h, h, pixel_w, pitch, max_merge)
 }
 
 /// Run greedy merge across horizontal strips in parallel.
 /// Uses thread-local buffers for the `used` bitset to avoid repeated allocation.
+#[cfg(feature = "rayon")]
 fn greedy_merge_parallel_strips(
     words: &[u64],
     runs: &[u16],
@@ -655,6 +689,7 @@ fn greedy_merge_strip(
 
 /// Greedy merge reusing a caller-provided `used` buffer (resized and zeroed as needed).
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "rayon")]
 fn greedy_merge_strip_reuse(
     words: &[u64],
     runs: &[u16],
@@ -776,7 +811,10 @@ fn histogram_merged_rects(
     let w = bitmap.width as usize;
     let h = bitmap.height as usize;
     let total = w * h;
+    #[cfg(not(feature = "rayon"))]
+    let _ = total;
 
+    #[cfg(feature = "rayon")]
     if total >= PARALLEL_PIXEL_THRESHOLD && h > STRIP_HEIGHT {
         return histogram_merge_parallel_strips(bitmap, pixel_w, pitch, max_merge);
     }
@@ -785,6 +823,7 @@ fn histogram_merged_rects(
 }
 
 /// Parallel strip-based histogram merge.
+#[cfg(feature = "rayon")]
 fn histogram_merge_parallel_strips(
     bitmap: &ArtworkBitmap,
     pixel_w: i32,

@@ -7,6 +7,12 @@ use crate::artwork::ArtworkBitmap;
 const GLYPH_W: u32 = 8;
 const GLYPH_H: u32 = 16;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFont {
+    Mono,
+    MonoItalic,
+}
+
 fn glyph8(ch: char) -> [u8; 8] {
     match ch {
         ' ' => [0, 0, 0, 0, 0, 0, 0, 0],
@@ -132,8 +138,23 @@ fn glyph8(ch: char) -> [u8; 8] {
     }
 }
 
-fn glyph16(ch: char) -> [u8; 16] {
+fn glyph8_for_font(ch: char, font: TextFont) -> [u8; 8] {
     let src = glyph8(ch);
+    match font {
+        TextFont::Mono => src,
+        TextFont::MonoItalic => {
+            let mut out = [0u8; 8];
+            for (row, bits) in src.into_iter().enumerate() {
+                let shift = ((7 - row) / 3) as u32;
+                out[row] = bits >> shift;
+            }
+            out
+        }
+    }
+}
+
+fn glyph16(ch: char, font: TextFont) -> [u8; 16] {
+    let src = glyph8_for_font(ch, font);
     let mut out = [0u8; 16];
     for (row, byte) in src.into_iter().enumerate() {
         let dst = row * 2;
@@ -145,6 +166,17 @@ fn glyph16(ch: char) -> [u8; 16] {
 
 #[must_use = "rendered text bitmap should be composited or converted to polygons"]
 pub fn render_text(text: &str, scale: u32, char_spacing: u32, line_spacing: u32) -> ArtworkBitmap {
+    render_text_with_font(text, scale, char_spacing, line_spacing, TextFont::Mono)
+}
+
+#[must_use = "rendered text bitmap should be composited or converted to polygons"]
+pub fn render_text_with_font(
+    text: &str,
+    scale: u32,
+    char_spacing: u32,
+    line_spacing: u32,
+    font: TextFont,
+) -> ArtworkBitmap {
     let scale = scale.max(1);
     let lines: Vec<&str> = text.split('\n').collect();
     let line_count = lines.len().max(1) as u32;
@@ -172,11 +204,14 @@ pub fn render_text(text: &str, scale: u32, char_spacing: u32, line_spacing: u32)
         let mut x = 0u32;
         let y0 = (li as u32) * (GLYPH_H * scale + line_spacing);
         for ch in line.chars() {
-            let glyph = glyph16(if ch.is_ascii() {
-                ch.to_ascii_uppercase()
-            } else {
-                '?'
-            });
+            let glyph = glyph16(
+                if ch.is_ascii() {
+                    ch.to_ascii_uppercase()
+                } else {
+                    '?'
+                },
+                font,
+            );
             for (gy, row_bits) in glyph.into_iter().enumerate() {
                 for gx in 0..GLYPH_W {
                     if (row_bits >> (7 - gx)) & 1 == 1 {

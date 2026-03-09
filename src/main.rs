@@ -25,6 +25,9 @@ use fabbula::qr::{EcLevel, render_qr};
 use fabbula::text::render_text;
 use fabbula::tiles::{TileConfig, TileLayer, generate_tile_pyramid, parse_hex_color};
 
+#[cfg(feature = "gui")]
+mod gui;
+
 #[derive(Parser)]
 #[command(
     name = "fabbula",
@@ -490,6 +493,18 @@ enum Commands {
     /// Show PDK details
     ShowPdk {
         /// PDK name or path
+        pdk: String,
+    },
+
+    /// Launch native desktop GUI (egui MVP)
+    #[cfg(feature = "gui")]
+    Gui {
+        /// Optional image path to preload
+        #[arg(short, long)]
+        input: Option<PathBuf>,
+
+        /// Initial PDK name or custom .toml path
+        #[arg(short, long, default_value = "sky130")]
         pdk: String,
     },
 }
@@ -1601,6 +1616,11 @@ fn main() -> Result<()> {
             for m in &config.metal_stack {
                 println!("  {} (GDS {}/{})", m.name, m.gds_layer, m.gds_datatype);
             }
+        }
+
+        #[cfg(feature = "gui")]
+        Commands::Gui { input, pdk } => {
+            gui::run_gui(input, Some(pdk))?;
         }
     }
 

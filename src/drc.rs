@@ -9,9 +9,11 @@
 
 use crate::pdk::{DrcRules, um_to_dbu};
 use crate::polygon::{Dbu, Point, Rect, bounding_box};
+#[cfg(feature = "rayon")]
 use rayon::prelude::*;
 use rstar::{AABB, RTree, RTreeObject};
 
+#[cfg(feature = "rayon")]
 const PARALLEL_RECT_THRESHOLD: usize = 5_000;
 
 /// DRC rule categories
@@ -205,9 +207,11 @@ pub fn check_drc_capped(
         .wide_metal_spacing
         .map(|s| um_to_dbu(s, db_units_per_um));
 
+    #[cfg(feature = "rayon")]
     let use_parallel = max_violations.is_none() && rects.len() >= PARALLEL_RECT_THRESHOLD;
 
     // Check widths, max width, and area - zero-allocation iterator chains
+    #[cfg(feature = "rayon")]
     if use_parallel {
         let width_area_violations: Vec<DrcViolation> = rects
             .par_iter()
@@ -258,7 +262,61 @@ pub fn check_drc_capped(
             })
             .collect();
         violations.extend(width_area_violations);
-    } else {
+    }
+    #[cfg(feature = "rayon")]
+    if !use_parallel {
+        for (i, r) in rects.iter().enumerate() {
+            if capped(&violations, max_violations) {
+                return violations;
+            }
+            let idx = i as u32;
+            let loc = Point::new(r.x0, r.y0);
+            if r.width() < min_w_dbu {
+                violations.push(DrcViolation {
+                    rule: DrcRule::MinWidth,
+                    rect_index: idx,
+                    other_index: 0,
+                    value: r.width().0 as i64,
+                    limit: min_w_dbu.0 as i64,
+                    location: loc,
+                });
+            }
+            if r.height() < min_w_dbu {
+                violations.push(DrcViolation {
+                    rule: DrcRule::MinWidth,
+                    rect_index: idx,
+                    other_index: 0,
+                    value: r.height().0 as i64,
+                    limit: min_w_dbu.0 as i64,
+                    location: loc,
+                });
+            }
+            if let Some(max_w) = max_w_dbu
+                && (r.width() > max_w || r.height() > max_w)
+            {
+                violations.push(DrcViolation {
+                    rule: DrcRule::MaxWidth,
+                    rect_index: idx,
+                    other_index: 0,
+                    value: r.width().max(r.height()).0 as i64,
+                    limit: max_w.0 as i64,
+                    location: loc,
+                });
+            }
+            if min_area_dbu2 > 0 && r.area() < min_area_dbu2 {
+                violations.push(DrcViolation {
+                    rule: DrcRule::MinArea,
+                    rect_index: idx,
+                    other_index: 0,
+                    value: r.area(),
+                    limit: min_area_dbu2,
+                    location: loc,
+                });
+            }
+        }
+    }
+    #[cfg(not(feature = "rayon"))]
+    {
         for (i, r) in rects.iter().enumerate() {
             if capped(&violations, max_violations) {
                 return violations;
@@ -320,6 +378,7 @@ pub fn check_drc_capped(
     };
     let sm = search_margin.0; // extract for AABB arithmetic
 
+    #[cfg(feature = "rayon")]
     if use_parallel {
         let spacing_violations: Vec<DrcViolation> = rects
             .par_iter()
@@ -361,7 +420,51 @@ pub fn check_drc_capped(
             })
             .collect();
         violations.extend(spacing_violations);
-    } else {
+    }
+    #[cfg(feature = "rayon")]
+    if !use_parallel {
+        for (i, r) in rects.iter().enumerate() {
+            if capped(&violations, max_violations) {
+                return violations;
+            }
+            let search_env =
+                AABB::from_corners([r.x0.0 - sm, r.y0.0 - sm], [r.x1.0 + sm, r.y1.0 + sm]);
+            for neighbor in tree.locate_in_envelope_intersecting(&search_env) {
+                if (neighbor.index as usize) <= i {
+                    continue;
+                }
+                let dist = rect_spacing(r, &neighbor.rect);
+                if dist <= Dbu(0) {
+                    continue;
+                }
+                let (effective_spacing, rule_kind) =
+                    if let (Some(thresh), Some(ws)) = (wide_thresh_dbu, wide_s_dbu) {
+                        let a_wide = r.width() >= thresh || r.height() >= thresh;
+                        let b_wide =
+                            neighbor.rect.width() >= thresh || neighbor.rect.height() >= thresh;
+                        if a_wide || b_wide {
+                            (ws, DrcRule::WideMetalSpacing)
+                        } else {
+                            (min_s_dbu, DrcRule::MinSpacing)
+                        }
+                    } else {
+                        (min_s_dbu, DrcRule::MinSpacing)
+                    };
+                if dist < effective_spacing {
+                    violations.push(DrcViolation {
+                        rule: rule_kind,
+                        rect_index: i as u32,
+                        other_index: neighbor.index,
+                        value: dist.0 as i64,
+                        limit: effective_spacing.0 as i64,
+                        location: Point::new(r.x0, r.y0),
+                    });
+                }
+            }
+        }
+    }
+    #[cfg(not(feature = "rayon"))]
+    {
         for (i, r) in rects.iter().enumerate() {
             if capped(&violations, max_violations) {
                 return violations;
@@ -508,8 +611,10 @@ fn check_density(
     let window_cells = (window_dbu / step) as usize;
 
     // Collect all valid window positions
+    #[cfg(feature = "rayon")]
     let use_parallel = rects.len() >= PARALLEL_RECT_THRESHOLD && max_violations.is_none();
 
+    #[cfg(feature = "rayon")]
     if use_parallel {
         // Compute window grid dimensions for allocation-free parallel iteration
         let nx = ((bb_x1 - grid_x0 - window_dbu) / step + 1).max(0) as usize;
@@ -551,7 +656,55 @@ fn check_density(
             })
             .collect();
         violations.extend(density_violations);
-    } else {
+    }
+    #[cfg(feature = "rayon")]
+    if !use_parallel {
+        let mut wx = grid_x0;
+        while wx + window_dbu <= bb_x1 {
+            let mut wy = grid_y0;
+            while wy + window_dbu <= bb_y1 {
+                if capped(violations, max_violations) {
+                    return;
+                }
+
+                let gx0 = ((wx - grid_x0) / step) as usize;
+                let gy0 = ((wy - grid_y0) / step) as usize;
+                let gx1 = (gx0 + window_cells).min(grid_w);
+                let gy1 = (gy0 + window_cells).min(grid_h);
+
+                let metal_area =
+                    sat[gy1 * sat_w + gx1] - sat[gy0 * sat_w + gx1] - sat[gy1 * sat_w + gx0]
+                        + sat[gy0 * sat_w + gx0];
+
+                if metal_area > max_metal {
+                    let density_permille = metal_area * 1000 / window_area_i64;
+                    violations.push(DrcViolation {
+                        rule: DrcRule::DensityMax,
+                        rect_index: 0,
+                        other_index: 0,
+                        value: density_permille,
+                        limit: density_max_permille,
+                        location: Point::new(wx, wy),
+                    });
+                }
+                if min_metal > 0 && metal_area < min_metal {
+                    let density_permille = metal_area * 1000 / window_area_i64;
+                    violations.push(DrcViolation {
+                        rule: DrcRule::DensityMin,
+                        rect_index: 0,
+                        other_index: 0,
+                        value: density_permille,
+                        limit: density_min_permille,
+                        location: Point::new(wx, wy),
+                    });
+                }
+                wy += step;
+            }
+            wx += step;
+        }
+    }
+    #[cfg(not(feature = "rayon"))]
+    {
         let mut wx = grid_x0;
         while wx + window_dbu <= bb_x1 {
             let mut wy = grid_y0;

@@ -13,6 +13,22 @@ homepage = "https://github.com/DanielKellerM/fabbula"
 readme = "README.md"
 exclude = ["profiling/", "outputs/", "media/", "docs/", "todo/"]
 
+[features]
+default = ["cli", "rayon", "gui"]
+cli = ["dep:clap", "dep:tracing-subscriber"]
+gui = ["dep:eframe", "dep:rfd"]
+wasm = [
+    "dep:wasm-bindgen",
+    "dep:js-sys",
+    "dep:serde-wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
+rayon = ["dep:rayon"]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 # GDSII I/O — gds21 is mature, serde-friendly, and part of Layout21
 gds21 = "0.2"
@@ -21,7 +37,7 @@ gds21 = "0.2"
 image = "0.25"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 
 # Config / PDK definitions
 serde = { version = "1", features = ["derive"] }
@@ -32,10 +48,10 @@ anyhow = "1"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 # Parallelism for large images
-rayon = "1"
+rayon = { version = "1", optional = true }
 
 # R-tree spatial index for scalable DRC
 rstar = "0.12"
@@ -51,6 +67,44 @@ resvg = "0.45"
 
 # QR code generation
 qrcode = "0.14"
+eframe = { version = "0.33", optional = true }
+rfd = { version = "0.15", optional = true }
+
+# WASM bindings
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Window",
+    "Location",
+    "Storage",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "Node",
+    "EventTarget",
+    "Event",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "HtmlSelectElement",
+    "HtmlOptionElement",
+    "HtmlButtonElement",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "HtmlImageElement",
+    "ImageData",
+    "File",
+    "FileList",
+    "Blob",
+    "FileReader",
+    "ProgressEvent",
+    "Url",
+    "HtmlAnchorElement",
+    "MouseEvent",
+    "WheelEvent",
+    "KeyboardEvent",
+] }
 
 [profile.release]
 lto = "fat"
@@ -60,6 +114,11 @@ strip = "symbols"
 [profile.bench]
 lto = "thin"
 codegen-units = 1
+
+[[bin]]
+name = "fabbula"
+path = "src/main.rs"
+required-features = ["cli"]
 
 [[bin]]
 name = "lint-commits"

@@ -1,7 +1,8 @@
 # WASM Browser App - Implementation Plan
 
-> First-of-its-kind: no browser-based GDSII generator exists. Only GDS viewers
-> (EECS Blazor, SILVERJ). No one does real-time interactive chip artwork composition.
+> Scope boundary: fabbula is a manufacturing-aware placer/converter.
+> Artwork authoring stays in external tools (Inkscape/Figma/Illustrator), then assets are
+> imported into fabbula for die-aware placement, DRC-aware generation, and export.
 
 ## Competitive Position
 
@@ -9,7 +10,7 @@
 |------------|---------------|--------------|
 | Image to GDS in browser | None | First |
 | Client-side GDSII generation | None | First |
-| Real-time polygon preview | None (desktop or browser) | First |
+| Die-aware placement + DRC-safe conversion | Fragmented scripts/tools | Unified |
 | DRC-aware anything in browser | None | First |
 | QR to DRC-clean GDS | LayoutEditor (commercial desktop, no DRC) | First DRC-aware, first in browser |
 | Text/font to DRC-clean GDS | gdstk, PHIDL (Python libs, no DRC) | First DRC-aware, first in browser |
@@ -19,14 +20,14 @@
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Composition Canvas (JS / Canvas2D)             │
-│  - Drag-drop background image (resize, position)│
-│  - Text overlays (font picker, editable)        │
-│  - QR code stamp (paste URL, drag to position)  │
-│  - Invert / dither / rotate controls            │
+│  Placement Canvas (JS / Canvas2D)               │
+│  - Import authored SVG/PNG assets               │
+│  - Import chip GDS and derive die/canvas bounds │
+│  - Move/scale placed image with handles         │
+│  - Optional simple text/QR labels               │
 ├─────────────────────────────────────────────────┤
 │  WASM Pipeline (Rust -> wasm32-unknown-unknown)  │
-│  - Reads composite bitmap from canvas ImageData  │
+│  - Reads placement bitmap from canvas ImageData  │
 │  - threshold -> bitmap -> polygons -> DRC check  │
 │  - Returns rect array + DRC results + stats      │
 ├─────────────────────────────────────────────────┤
@@ -61,12 +62,11 @@ WASM overhead: 1.5-3x slower (no SIMD initially, single-threaded).
 
 Strategy: preview at 256-512px during interaction (instant), full resolution on release.
 
-## Debouncing Strategy
+## Interaction Strategy
 
-- During drag/resize: pipeline at 256px preview (~2ms), update live
-- On mouse release: full resolution run (512-1024px)
-- Text editing: 150ms debounce after last keystroke
-- PDK/strategy change: immediate full run
+- During move/scale drag: pipeline at preview resolution (~256-768px), update live
+- On mouse release: full-resolution refinement run
+- Placement/PDK/strategy changes: debounced preview, queued full-res latest-only
 - "Download GDS" button: full resolution, write GDS bytes, trigger browser download
 
 ---
@@ -146,11 +146,12 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
 
 ### Phase 2: Minimal Browser UI
 
-> Drag-drop image, pick PDK, see polygon preview, download GDS.
+> Import asset, pick PDK, place against die bounds, preview polygons, download GDS.
 
 - [ ] Create `wasm/index.html` - single self-contained HTML file
   - PDK selector (tabs for 6 built-in + "Custom" tab)
-  - Image drop zone (drag-drop or file picker)
+  - Asset drop zone (drag-drop or file picker)
+  - Optional chip GDS input to set die/canvas bounds
   - Strategy dropdown (greedy-merge default)
   - Invert / dither toggles
   - "Generate" button (or auto-generate on drop)
@@ -173,14 +174,15 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
   - Green badge: "DRC clean" with checkmark
   - Red badge: violation count + expandable list
 
-### Phase 3: Real-Time Interactive Composition
+### Phase 3: Real-Time Placement
 
-> The killer feature: drag image, add text, place QR, see polygons update live.
+> Core feature: place/scale imported artwork over real die geometry with live preview.
 
-- [ ] Composition canvas (left panel)
-  - Background image layer: drag to position, corner handles to resize
+- [ ] Placement canvas (left panel)
+  - Imported image layer: drag to position, corner handles to resize
   - Aspect ratio lock toggle
-  - Canvas composites all layers to hidden canvas for WASM input
+  - Canvas bounds driven by input GDS die extents when provided
+  - Canvas composites placement bitmap for WASM input
 
 - [ ] Real-time pipeline loop
   ```js
@@ -193,25 +195,12 @@ Strategy: preview at 256-512px during interaction (instant), full resolution on 
       updateDrc(result.violations);
   }
   ```
-  - During drag: generate at 256px (debounce 16ms = 60fps cap)
+  - During drag: generate preview resolution (debounce for responsiveness)
   - On release: generate at full resolution
 
-- [ ] Text overlay tool
-  - Click to place text cursor on composition canvas
-  - Text input field, font dropdown (system fonts via canvas measureText)
-  - Font size slider (in pixels, shown as um equivalent)
-  - Color: white on dark = metal text, black on light = cutout text
-  - Text rendered onto composition canvas, fed to WASM as part of bitmap
-  - Multiple text elements, each draggable
-
-- [ ] QR code tool
-  - URL/text input field
-  - QR generated client-side (JS library: `qrcode-generator` or similar)
-  - Rendered as image on composition canvas
-  - Draggable, resizable (with minimum size warning based on PDK pitch)
-  - Size indicator: "QR: 500x500 um (scannable)" or "QR: 50x50 um (too small)"
-
-- [ ] Layer ordering: image (bottom) -> QR (middle) -> text (top)
+- [ ] Optional simple label overlays (text/QR)
+  - Single-purpose metadata/traceability labels
+  - Keep controls minimal (payload, size, placement), no rich editor features
 
 ### Phase 4: Custom PDK Editor
 
@@ -300,10 +289,8 @@ No new runtime dependencies for the CLI. WASM deps only compile for wasm32 targe
 
 - [ ] WASM binary size: gds21 + image + toml + serde could be large. Profile with `twiggy`.
   Target <2MB after wasm-opt. If too large, consider lazy-loading gds21 (only for download).
-- [ ] Font rendering in composition: use canvas.fillText() (JS-side, zero WASM cost) or
-  rasterize in Rust? JS-side is simpler and gives access to all system fonts.
-- [ ] QR generation: JS-side library or Rust `qrcode` crate compiled to WASM?
-  JS-side avoids bloating WASM binary. QR is just a bitmap either way.
+- [ ] Keep text rendering scope minimal: Rust raster font options vs JS text; avoid rich typography/editor scope.
+- [ ] QR generation path: JS-side library or Rust `qrcode` in WASM; whichever keeps binary lean and deterministic.
 - [ ] Multi-layer color modes: support channel/palette in WASM or single-layer only for v1?
   Start with single-layer, add multi-layer in a follow-up.
 - [ ] SVG preview vs Canvas2D for polygon rendering: Canvas2D is simpler and faster for

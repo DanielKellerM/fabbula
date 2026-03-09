@@ -10,7 +10,6 @@
 
 use crate::pdk::PdkConfig;
 use anyhow::{Context, Result};
-use clap::ValueEnum;
 use image::{DynamicImage, GenericImageView, Luma};
 use std::path::Path;
 
@@ -231,7 +230,8 @@ impl ArtworkBitmap {
 }
 
 /// Placement presets for compositing overlays onto a bitmap canvas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum OverlayPosition {
     Top,
     Bottom,
@@ -398,7 +398,7 @@ pub fn floyd_steinberg_dither(gray: &mut image::GrayImage, threshold: u8) {
         }
     }
 
-    let raw = gray.as_mut();
+    let raw: &mut [u8] = gray.as_mut();
     for (px, &val) in raw.iter_mut().zip(buf.iter()) {
         *px = val.clamp(0.0, 255.0) as u8;
     }
@@ -412,6 +412,70 @@ pub fn load_image_file(path: &Path, max_pixels: Option<(u32, u32)>) -> Result<Dy
         image::open(path).with_context(|| format!("Failed to open image: {}", path.display()))?
     };
     Ok(img)
+}
+
+/// Convert RGBA pixels into a binary artwork bitmap.
+///
+/// `pixels` must be tightly packed RGBA bytes of length `width * height * 4`.
+pub fn bitmap_from_rgba(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    threshold: ThresholdMode,
+    dither: DitherMode,
+) -> Result<ArtworkBitmap> {
+    let expected = width as usize * height as usize * 4;
+    anyhow::ensure!(
+        pixels.len() == expected,
+        "RGBA buffer length mismatch: got {}, expected {} ({}x{}x4)",
+        pixels.len(),
+        expected,
+        width,
+        height
+    );
+
+    let rgba = image::RgbaImage::from_raw(width, height, pixels.to_vec())
+        .ok_or_else(|| anyhow::anyhow!("failed to build RGBA image"))?;
+    let img = DynamicImage::ImageRgba8(rgba);
+
+    let bools: Vec<bool> = match threshold {
+        ThresholdMode::Luminance(thresh) => {
+            let mut gray = img.to_luma8();
+            if dither == DitherMode::FloydSteinberg {
+                floyd_steinberg_dither(&mut gray, thresh);
+            }
+            gray.pixels().map(|Luma([v])| *v < thresh).collect()
+        }
+        ThresholdMode::Otsu | ThresholdMode::Auto => {
+            let mut gray = img.to_luma8();
+            let thresh = otsu_threshold(&gray);
+            if dither == DitherMode::FloydSteinberg {
+                floyd_steinberg_dither(&mut gray, thresh);
+            }
+            gray.pixels().map(|Luma([v])| *v < thresh).collect()
+        }
+        ThresholdMode::Alpha(thresh) => {
+            if dither == DitherMode::FloydSteinberg {
+                let mut alpha_gray = image::GrayImage::from_raw(
+                    width,
+                    height,
+                    img.to_rgba8().pixels().map(|p| p[3]).collect(),
+                )
+                .expect("alpha buffer size matches");
+                floyd_steinberg_dither(&mut alpha_gray, thresh);
+                alpha_gray.pixels().map(|Luma([v])| *v >= thresh).collect()
+            } else {
+                let rgba = img.to_rgba8();
+                rgba.pixels().map(|p| p[3] >= thresh).collect()
+            }
+        }
+    };
+
+    let mut bitmap = ArtworkBitmap::from_bools(width, height, &bools);
+    if threshold == ThresholdMode::Auto && bitmap.density() > 0.5 {
+        bitmap.invert();
+    }
+    Ok(bitmap)
 }
 
 /// Load an image file and convert to a binary artwork bitmap.
@@ -1560,6 +1624,40 @@ mod tests {
         assert!(w <= 50 && h <= 50);
         assert_eq!(w, 50); // Width-limited
         assert_eq!(h, 25); // Half height due to aspect ratio
+    }
+
+    #[test]
+    fn test_bitmap_from_rgba_basic() {
+        let pixels = vec![
+            0u8, 0, 0, 255, // dark -> metal
+            255, 255, 255, 255, // bright -> gap
+            255, 255, 255, 0, // transparent
+            0, 0, 0, 255, // dark
+        ];
+        let bmp = bitmap_from_rgba(
+            &pixels,
+            2,
+            2,
+            ThresholdMode::Luminance(128),
+            DitherMode::Off,
+        )
+        .unwrap();
+        assert!(bmp.get(0, 0));
+        assert!(!bmp.get(1, 0));
+        assert!(bmp.get(1, 1));
+    }
+
+    #[test]
+    fn test_bitmap_from_rgba_bad_length() {
+        let err = bitmap_from_rgba(
+            &[0u8; 3],
+            1,
+            1,
+            ThresholdMode::Luminance(128),
+            DitherMode::Off,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("RGBA buffer length mismatch"));
     }
 
     #[test]

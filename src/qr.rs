@@ -4,11 +4,11 @@
 
 use crate::artwork::ArtworkBitmap;
 use anyhow::Result;
-use clap::ValueEnum;
 use qrcode::types::Color;
 use qrcode::{EcLevel as QrEcLevel, QrCode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum EcLevel {
     L,
     M,

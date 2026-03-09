@@ -108,21 +108,13 @@ pub struct LayerRects<'a> {
     pub datatype: i16,
 }
 
-/// Write multiple layers of polygons to a new GDSII file.
-///
-/// `db_units_per_um` sets the GDS units header so downstream tools interpret
-/// coordinates correctly (e.g. 1000 for 1nm resolution).
-pub fn write_gds_multi(
+fn build_gds_library(
     layers: &[LayerRects],
     cell_name: &str,
-    output: &Path,
     library_name: &str,
     db_units_per_um: u32,
-) -> Result<()> {
+) -> (GdsLibrary, usize) {
     let mut lib = GdsLibrary::new(library_name);
-    // Set GDS units: (user_unit, db_unit_in_meters)
-    // user_unit = 1 DB unit in um = 1/db_units_per_um
-    // db_unit_in_meters = user_unit * 1e-6
     let user_unit = 1.0 / db_units_per_um as f64;
     lib.units = gds21::GdsUnits::new(user_unit, user_unit * 1e-6);
     let mut cell = GdsStruct::new(cell_name);
@@ -137,6 +129,21 @@ pub fn write_gds_multi(
     }
 
     lib.structs.push(cell);
+    (lib, total)
+}
+
+/// Write multiple layers of polygons to a new GDSII file.
+///
+/// `db_units_per_um` sets the GDS units header so downstream tools interpret
+/// coordinates correctly (e.g. 1000 for 1nm resolution).
+pub fn write_gds_multi(
+    layers: &[LayerRects],
+    cell_name: &str,
+    output: &Path,
+    library_name: &str,
+    db_units_per_um: u32,
+) -> Result<()> {
+    let (lib, total) = build_gds_library(layers, cell_name, library_name, db_units_per_um);
 
     lib.save(output)
         .map_err(|e| gds_err(e, &format!("Failed to write GDSII {}", output.display())))?;
@@ -150,6 +157,20 @@ pub fn write_gds_multi(
     );
 
     Ok(())
+}
+
+/// Write multiple layers of polygons to GDSII bytes.
+pub fn write_gds_multi_to_bytes(
+    layers: &[LayerRects],
+    cell_name: &str,
+    library_name: &str,
+    db_units_per_um: u32,
+) -> Result<Vec<u8>> {
+    let (lib, _) = build_gds_library(layers, cell_name, library_name, db_units_per_um);
+    let mut bytes = Vec::new();
+    lib.write(&mut bytes)
+        .map_err(|e| gds_err(e, "Failed to serialize GDSII"))?;
+    Ok(bytes)
 }
 
 /// Write polygons to a new GDSII file (single layer).
@@ -617,6 +638,150 @@ pub fn read_existing_metal(
     Ok(rects)
 }
 
+/// Read the flattened bounding box of all geometry in a GDS cell hierarchy.
+///
+/// If `cell_name` is `None`, uses the last struct in the library.
+pub fn read_gds_bounds(gds_path: &Path, cell_name: Option<&str>) -> Result<Rect> {
+    let lib = load_gds(gds_path)?;
+    let cell = if let Some(name) = cell_name {
+        lib.structs.iter().find(|s| s.name == name).ok_or_else(|| {
+            let available = format_cell_list(&lib.structs);
+            anyhow::anyhow!(
+                "Cell '{}' not found in GDS. Available cells: {}",
+                name,
+                available
+            )
+        })?
+    } else {
+        lib.structs
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No cells in GDS"))?
+    };
+
+    fn flatten_cell_all(
+        cell: &GdsStruct,
+        cell_map: &HashMap<&str, &GdsStruct>,
+        transform: &Transform,
+        rects: &mut Vec<Rect>,
+        depth: usize,
+    ) {
+        if depth >= MAX_HIERARCHY_DEPTH {
+            return;
+        }
+        for elem in &cell.elems {
+            match elem {
+                gds21::GdsElement::GdsBoundary(b) => {
+                    if b.xy.is_empty() {
+                        continue;
+                    }
+                    let mut x0 = i32::MAX;
+                    let mut y0 = i32::MAX;
+                    let mut x1 = i32::MIN;
+                    let mut y1 = i32::MIN;
+                    for p in &b.xy {
+                        let (tx, ty) = transform.apply(p);
+                        x0 = x0.min(tx);
+                        y0 = y0.min(ty);
+                        x1 = x1.max(tx);
+                        y1 = y1.max(ty);
+                    }
+                    if x0 < x1 && y0 < y1 {
+                        rects.push(Rect::new(x0, y0, x1, y1));
+                    }
+                }
+                gds21::GdsElement::GdsPath(p) => {
+                    if p.xy.is_empty() {
+                        continue;
+                    }
+                    let half_w = p.width.unwrap_or(0).max(0) / 2;
+                    let mut x0 = i32::MAX;
+                    let mut y0 = i32::MAX;
+                    let mut x1 = i32::MIN;
+                    let mut y1 = i32::MIN;
+                    for pt in &p.xy {
+                        let (tx, ty) = transform.apply(pt);
+                        x0 = x0.min(tx);
+                        y0 = y0.min(ty);
+                        x1 = x1.max(tx);
+                        y1 = y1.max(ty);
+                    }
+                    x0 -= half_w;
+                    y0 -= half_w;
+                    x1 += half_w;
+                    y1 += half_w;
+                    if x0 < x1 && y0 < y1 {
+                        rects.push(Rect::new(x0, y0, x1, y1));
+                    }
+                }
+                gds21::GdsElement::GdsStructRef(sref) => {
+                    if let Some(child) = cell_map.get(sref.name.as_str()) {
+                        let child_transform =
+                            transform.compose(sref.strans.as_ref(), sref.xy.x, sref.xy.y);
+                        flatten_cell_all(child, cell_map, &child_transform, rects, depth + 1);
+                    }
+                }
+                gds21::GdsElement::GdsArrayRef(aref) => {
+                    if let Some(child) = cell_map.get(aref.name.as_str()) {
+                        let origin = &aref.xy[0];
+                        let cols = aref.cols.max(0) as i32;
+                        let rows = aref.rows.max(0) as i32;
+                        let col_pitch_x = if cols > 0 {
+                            (aref.xy[1].x - origin.x) / cols
+                        } else {
+                            0
+                        };
+                        let col_pitch_y = if cols > 0 {
+                            (aref.xy[1].y - origin.y) / cols
+                        } else {
+                            0
+                        };
+                        let row_pitch_x = if rows > 0 {
+                            (aref.xy[2].x - origin.x) / rows
+                        } else {
+                            0
+                        };
+                        let row_pitch_y = if rows > 0 {
+                            (aref.xy[2].y - origin.y) / rows
+                        } else {
+                            0
+                        };
+                        for r in 0..rows {
+                            for c in 0..cols {
+                                let inst_x = origin
+                                    .x
+                                    .saturating_add(c.saturating_mul(col_pitch_x))
+                                    .saturating_add(r.saturating_mul(row_pitch_x));
+                                let inst_y = origin
+                                    .y
+                                    .saturating_add(c.saturating_mul(col_pitch_y))
+                                    .saturating_add(r.saturating_mul(row_pitch_y));
+                                let child_transform =
+                                    transform.compose(aref.strans.as_ref(), inst_x, inst_y);
+                                flatten_cell_all(
+                                    child,
+                                    cell_map,
+                                    &child_transform,
+                                    rects,
+                                    depth + 1,
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let cell_map: HashMap<&str, &GdsStruct> =
+        lib.structs.iter().map(|s| (s.name.as_str(), s)).collect();
+    let mut rects = Vec::new();
+    flatten_cell_all(cell, &cell_map, &Transform::identity(), &mut rects, 0);
+    let bb = crate::polygon::bounding_box(&rects)
+        .ok_or_else(|| anyhow::anyhow!("No geometry found in selected cell hierarchy"))?;
+    Ok(bb)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,6 +1121,20 @@ mod tests {
             rects.len(),
             "Boundary count should match the number of rects written"
         );
+    }
+
+    #[test]
+    fn test_write_gds_multi_to_bytes_roundtrip() {
+        let rects = vec![Rect::new(0, 0, 100, 100), Rect::new(200, 0, 300, 100)];
+        let layers = [LayerRects {
+            rects: &rects,
+            layer: 72,
+            datatype: 20,
+        }];
+        let bytes = write_gds_multi_to_bytes(&layers, "artwork", "fabbula", 1000).unwrap();
+        let lib = GdsLibrary::from_bytes(bytes).unwrap();
+        assert_eq!(lib.structs.len(), 1);
+        assert_eq!(lib.structs[0].elems.len(), rects.len());
     }
 
     #[test]
