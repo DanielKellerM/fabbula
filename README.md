@@ -11,7 +11,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![CI](https://img.shields.io/github/actions/workflow/status/DanielKellerM/fabbula/ci.yml?label=CI)](https://github.com/DanielKellerM/fabbula/actions) [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Getting Started](#getting-started) · [Examples](#examples) · [How It Works](#how-it-works) · [Supported PDKs](#supported-pdks) · [Performance](#performance) · [Prompt Guide](#prompt-guide) · [Roadmap](#roadmap)
+[Getting Started](#getting-started) · [Readiness Levels](#readiness-levels) · [Examples](#examples) · [How It Works](#how-it-works) · [Supported PDKs](#supported-pdks) · [Performance](#performance) · [Prompt Guide](#prompt-guide) · [Roadmap](#roadmap)
 
 </div>
 
@@ -26,7 +26,7 @@ The name comes from **fab** (as in semiconductor fabrication) + **fabula** (Lati
 In the open-source chip community, there's a long tradition of hiding art on the die: logos, mascots, inside jokes, dedications. Until now, getting art onto your tapeout meant cobbling together Python scripts, ImageMagick, Inkscape, KLayout macros, and a lot of manual DRC cleanup. **fabbula** replaces all of that with a single Rust binary. One command. Zero runtime dependencies.
 
 ```
-prompt → AI image → fabbula → GDSII → tapeout → your art lives in silicon forever
+prompt → AI image → fabbula → GDSII/LEF → external signoff (DRC/LVS) → tapeout
 ```
 
 ## Examples
@@ -63,6 +63,27 @@ fabbula merge -i mascot.png --chip my_chip.gds -o my_chip_art.gds -p gf180mcu
 fabbula generate -i dalle_output.png -o art.gds -p sky130 \
     --size-um 2000x2000 --check-drc
 ```
+
+More onboarding docs:
+
+- [5-minute quickstart](docs/QUICKSTART.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+
+## Readiness Levels
+
+fabbula uses three readiness labels to avoid ambiguity:
+
+- **Silicon-proven**
+  - Demonstrated on real tapeout(s) with post-merge signoff evidence.
+  - Current status for fabbula: **Not yet**.
+- **Deck-validated**
+  - Output checked against external DRC decks (e.g., KLayout/foundry rule decks), with published artifacts.
+  - Current status for fabbula: **In progress**.
+- **Experimental**
+  - Useful features that are not yet externally validated for production signoff.
+  - Includes virtual-PDK workflows and new feature surfaces.
+
+See the validation artifact plan in `validation/` (to be populated) and the [Disclaimer](#disclaimer).
 
 ## How It Works
 

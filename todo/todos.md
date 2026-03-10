@@ -601,6 +601,82 @@ but could hurt credibility with experts who know these aren't real.
   - Merge artwork into real chip GDS, re-run DRC
   - Document results in README for credibility
 
+## Publish Readiness (2026-03-10)
+
+- [ ] **P0** Publish external DRC validation results for multiple PDKs
+  - Run KLayout/foundry deck checks for SKY130, GF180MCU, and IHP SG13G2 outputs
+  - Publish logs/reports/screenshots (not just internal `check_drc` output)
+  - Files: new `validation/` directory, `README.md`
+
+- [ ] **P0** End-to-end real-chip merge validation case study
+  - Merge generated artwork into a real chip GDS
+  - Re-run external DRC and publish before/after evidence
+  - Files: `validation/case_studies/`, `README.md`
+
+- [~] **P0** Validation artifact structure and reproducible scripts
+  - Added `validation/README.md` scaffold with artifact layout and reproducibility rules
+  - Remaining: implement deterministic validation scripts and publish first reports
+
+- [~] **P1** Product positioning clarity in README
+  - Added readiness-level framing (`silicon-proven`, `deck-validated`, `experimental`) in README
+  - Tightened top-level flow wording to include external signoff
+  - Remaining: full pass to down-rank any remaining tapeout-guarantee phrasing
+  - Files: `README.md`
+
+- [~] **P1** First-run onboarding hardening
+  - Added `docs/QUICKSTART.md` (generate + merge + GUI)
+  - Added known-good starter commands for SKY130/GF180/IHP
+  - Added `docs/TROUBLESHOOTING.md`
+  - Remaining: tighten and validate commands against release artifacts
+  - Files: `README.md`, `docs/QUICKSTART.md`, `docs/TROUBLESHOOTING.md`
+
+- [ ] **P1** Release maturity and publish pipeline
+  - Produce tagged releases with binaries (macOS/Linux/Windows)
+  - Add changelog + migration notes for each release
+  - Attach reproducible benchmark/regression reports to releases
+  - Files: `.github/workflows/`, `CHANGELOG.md`, `docs/releases/`
+
+- [ ] **P1** External quality signals
+  - Add public status badges (CI matrix, coverage, lint)
+  - Create golden regression corpus (inputs + expected stats/DRC outcomes)
+  - Add GUI smoke coverage for merge/save path
+  - Files: `README.md`, `tests/`, `.github/workflows/`
+
+- [ ] **P2** Community/publicization package
+  - Expand gallery with one tapeout-style walkthrough
+  - Publish short technical comparison write-up with measured data
+  - Add issue templates, roadmap labels, and "good first issue" tagging
+  - Files: `docs/`, `.github/ISSUE_TEMPLATE/`, GitHub labels
+
+## Rust-First Interoperability (No Runtime Coupling)
+
+- [ ] **P1** Position interop as compatibility, not integration
+  - Use language like "OpenROAD/OpenLane-compatible outputs" (not "integrated")
+  - Keep scope focused on standards-compliant artifact generation
+  - Files: `README.md`, docs
+
+- [ ] **P1** File-and-docs integration kit (`integration/`)
+  - Add `integration/` folder with minimal handoff templates and expected layout
+  - Include sample config snippets and naming conventions only (no wrappers)
+  - Files: new `integration/`, `docs/OPENROAD_OPENLANE.md`
+
+- [ ] **P1** Define `fabbula package-macro` CLI spec (Rust-only helper)
+  - Command should emit ready-to-drop macro bundle (`.gds`, `.lef`, metadata/readme)
+  - No Python/Tcl runtime dependency
+  - Deliverable: written CLI spec + file schema before implementation
+  - Spec drafted: `docs/SPEC_PACKAGE_MACRO.md` (keep updated if scope changes)
+  - Files: `docs/SPEC_PACKAGE_MACRO.md`
+
+- [ ] **P2** Optional `package-macro` implementation
+  - Implement Rust subcommand after spec review
+  - Output deterministic artifact bundle and manifest JSON
+  - Files: `src/main.rs`, `src/*`, tests
+
+- [ ] **P1** Open-format validation gate
+  - Add sanity checks for generated LEF/GDS parser compatibility and geometry consistency
+  - Keep validation tool-agnostic and reproducible
+  - Files: `tests/`, `validation/`, docs
+
 ## Completed
 
 - [x] Make touching mode the default, add `--separated` opt-out flag
