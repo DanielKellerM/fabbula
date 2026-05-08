@@ -1,3 +1,4 @@
 [submodule "nonfree"]
 	path = nonfree
 	url = git@gitlab.csem.local:dkm/fabbula-nonfree.git
+	update = none
