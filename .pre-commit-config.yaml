@@ -52,3 +52,10 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-push]
+
+      - id: lint-commits
+        name: lint commit messages (pre-push)
+        entry: cargo run --quiet --bin lint-commits
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
