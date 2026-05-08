@@ -139,6 +139,10 @@ enum Commands {
         #[arg(long)]
         no_check_drc: bool,
 
+        /// Fill the OFF diagonal of every checker 2x2 to eliminate corner-only adjacencies
+        #[arg(long)]
+        break_checkers: bool,
+
         /// Disable automatic density enforcement (allow density violations)
         #[arg(long)]
         no_density_enforce: bool,
@@ -950,6 +954,7 @@ fn main() -> Result<()> {
             html,
             lef,
             no_check_drc,
+            break_checkers,
             no_density_enforce,
             dither,
             color_mode,
@@ -1041,7 +1046,18 @@ fn main() -> Result<()> {
                     overlays,
                     log_single_density: true,
                 },
-                |_| Ok(()),
+                |bitmap| {
+                    if break_checkers {
+                        let filled = bitmap.break_checkerboards();
+                        if filled > 0 {
+                            tracing::info!(
+                                "break_checkerboards: filled {} pixels to remove diagonal-only adjacencies",
+                                filled
+                            );
+                        }
+                    }
+                    Ok(())
+                },
             )?;
             let layer_results: Vec<(Vec<Rect>, &ArtworkLayerProfile)> = layer_results
                 .into_iter()

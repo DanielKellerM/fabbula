@@ -126,6 +126,45 @@ impl ArtworkBitmap {
         self.metal_count() as f64 / (self.width * self.height) as f64
     }
 
+    pub fn break_checkerboards(&mut self) -> usize {
+        let mut total = 0usize;
+        loop {
+            let added = self.break_checkerboards_one_pass();
+            total += added;
+            if added == 0 {
+                break;
+            }
+        }
+        total
+    }
+
+    fn break_checkerboards_one_pass(&mut self) -> usize {
+        if self.width < 2 || self.height < 2 {
+            return 0;
+        }
+        let mut to_fill: Vec<(u32, u32)> = Vec::new();
+        for y in 0..self.height - 1 {
+            for x in 0..self.width - 1 {
+                let tl = self.get(x, y);
+                let tr = self.get(x + 1, y);
+                let bl = self.get(x, y + 1);
+                let br = self.get(x + 1, y + 1);
+                if tl && br && !tr && !bl {
+                    to_fill.push((x + 1, y));
+                    to_fill.push((x, y + 1));
+                } else if !tl && !br && tr && bl {
+                    to_fill.push((x, y));
+                    to_fill.push((x + 1, y + 1));
+                }
+            }
+        }
+        let n = to_fill.len();
+        for (x, y) in to_fill {
+            self.set(x, y, true);
+        }
+        n
+    }
+
     /// Rotate the bitmap by 90, 180, or 270 degrees clockwise.
     pub fn rotate(&mut self, degrees: u32) {
         match degrees % 360 {
