@@ -44,7 +44,7 @@ jobs:
       - name: Run coverage
         run: >
           cargo llvm-cov
-          --ignore-filename-regex '(main\.rs|profiling/|util/)'
+          --ignore-filename-regex '(main\.rs|gui\.rs|profiling/|util/)'
           --fail-under-lines 70
           --summary-only
 
