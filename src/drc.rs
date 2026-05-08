@@ -395,12 +395,10 @@ pub fn check_drc_capped(
                         }
                         let (effective_spacing, rule_kind) =
                             if let (Some(thresh), Some(ws)) = (wide_thresh_dbu, wide_s_dbu) {
-                                let a_wide = r.width() >= thresh || r.height() >= thresh;
+                                let a_wide = r.width() >= thresh && r.height() >= thresh;
                                 let b_wide = neighbor.rect.width() >= thresh
-                                    || neighbor.rect.height() >= thresh;
+                                    && neighbor.rect.height() >= thresh;
                                 if a_wide || b_wide {
-                                    // Note: uses single threshold for both wide-to-narrow and
-                                    // wide-to-wide checks. Real PDKs may distinguish these cases.
                                     (ws, DrcRule::WideMetalSpacing)
                                 } else {
                                     (min_s_dbu, DrcRule::MinSpacing)
@@ -439,9 +437,9 @@ pub fn check_drc_capped(
                 }
                 let (effective_spacing, rule_kind) =
                     if let (Some(thresh), Some(ws)) = (wide_thresh_dbu, wide_s_dbu) {
-                        let a_wide = r.width() >= thresh || r.height() >= thresh;
+                        let a_wide = r.width() >= thresh && r.height() >= thresh;
                         let b_wide =
-                            neighbor.rect.width() >= thresh || neighbor.rect.height() >= thresh;
+                            neighbor.rect.width() >= thresh && neighbor.rect.height() >= thresh;
                         if a_wide || b_wide {
                             (ws, DrcRule::WideMetalSpacing)
                         } else {
@@ -481,9 +479,9 @@ pub fn check_drc_capped(
                 }
                 let (effective_spacing, rule_kind) =
                     if let (Some(thresh), Some(ws)) = (wide_thresh_dbu, wide_s_dbu) {
-                        let a_wide = r.width() >= thresh || r.height() >= thresh;
+                        let a_wide = r.width() >= thresh && r.height() >= thresh;
                         let b_wide =
-                            neighbor.rect.width() >= thresh || neighbor.rect.height() >= thresh;
+                            neighbor.rect.width() >= thresh && neighbor.rect.height() >= thresh;
                         if a_wide || b_wide {
                             (ws, DrcRule::WideMetalSpacing)
                         } else {
