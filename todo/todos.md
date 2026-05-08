@@ -137,6 +137,11 @@
   - Enable Pages in repo settings: Source = "Deploy from branch", Branch = `main`, Folder = `/docs`
   - `docs/index.html` and `docs/previews/` already committed
 
+- [ ] **P2** Make `gui.rs` testable and remove from coverage exclusion
+  - Currently excluded via `--ignore-filename-regex` in `.github/workflows/ci.yml`
+  - Split into thin egui shell + pure-logic module (state transitions, event handling, save/load)
+  - Test the logic module; re-enable in coverage gate (target 70%+ on the logic module)
+
 ## Open-Source Readiness
 
 ### P0 - Correctness
